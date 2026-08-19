@@ -1,0 +1,12 @@
+# RouterOS L6 license signatures
+#
+# Copy this file to keys.toml and fill in your own signature_hex values.
+# No recompilation needed; more keys = faster search.
+#
+# How to obtain signature_hex:
+#   1. Extract from MBR: hexdump -s 0x110 -n 64 /dev/sdX
+#   2. Convert from key text: python3 -c "from MTTools import MTBse64Decode; print(MTBse64Decode('...').hex())"
+
+[[key]]
+software_id = "XXXX-XXXX"
+signature_hex = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"

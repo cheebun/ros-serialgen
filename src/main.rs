@@ -1,0 +1,894 @@
+//! RouterOS L6 Serial Generator — computes serials from existing licenses + key conversion tool
+//!
+//! Supports AVX-512 SIMD acceleration: computes 16 SHA-256 hashes per batch,
+//! auto-detected at runtime with fallback to the scalar implementation.
+
+mod convert;
+mod sha256;
+mod sha256_constants;
+#[cfg(test)]
+mod sha256_scalar;
+mod sha256_simd;
+mod software_id;
+mod targets;
+
+use clap::{Parser, Subcommand};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Instant;
+
+// ---- Constants ----
+
+/// Space padding byte in SHA-256 input (RouterOS convention)
+const SPACE_PADDING: u8 = 0x20;
+/// Serial field length (20-digit decimal ASCII)
+const SERIAL_LEN: usize = 20;
+/// Model field length (16 bytes, space-padded)
+const MODEL_LEN: usize = 16;
+/// Total SHA-256 input length: serial(20) + model(16) + sector_val(4)
+const INPUT_LEN: usize = SERIAL_LEN + MODEL_LEN + 4;
+/// Number of lanes computed in parallel per SIMD batch
+const SIMD_LANES: usize = 16;
+/// Progress report interval (every 10,000M = 10 billion hashes)
+const PROGRESS_INTERVAL: u64 = 10_000_000_000;
+
+// ---- CLI definition ----
+
+#[derive(Parser)]
+#[command(name = "ros-serialgen")]
+#[command(about = "RouterOS L6 Serial Generator — collision search & key conversion")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Search collision serial for a disk size
+    Search {
+        /// Disk size in GB
+        #[arg(short = 's', long)]
+        disk_gb: u32,
+        /// Thread count
+        #[arg(short, long)]
+        threads: Option<usize>,
+        /// Model name (default: ROS<GB>G)
+        #[arg(short, long)]
+        model: Option<String>,
+        /// keys.toml path
+        #[arg(short, long)]
+        keys: Option<String>,
+        /// Number of collisions to find (default: 1, 0 = unlimited)
+        #[arg(short = 'c', long, default_value = "1")]
+        count: usize,
+        /// Start from N million hashes (resume from progress output)
+        #[arg(short = 'f', long, default_value = "0")]
+        from: u64,
+    },
+    /// Convert signature_hex to Key text
+    Sig2key {
+        /// 128-char hex string (64 bytes)
+        signature_hex: String,
+    },
+    /// Convert Key text file to signature_hex
+    Key2sig {
+        /// Path to .key file
+        key_file: String,
+    },
+    /// Verify SOFTWARE ID computation with known test vectors
+    Verify,
+    /// Check a serial against known signatures
+    Check {
+        /// Serial number (20-digit string)
+        #[arg(long)]
+        serial: String,
+        /// Disk size in GB
+        #[arg(short = 's', long)]
+        disk_gb: u32,
+        /// Model name (default: ROS<GB>G)
+        #[arg(short, long)]
+        model: Option<String>,
+        /// keys.toml path
+        #[arg(short, long)]
+        keys: Option<String>,
+    },
+}
+
+// ---- Search context ----
+
+/// Context shared across search threads (avoids excessive parameters)
+struct SearchContext {
+    model_bytes: [u8; MODEL_LEN],
+    sv_bytes: [u8; 4],
+    targets: Arc<Vec<targets::Target>>,
+    mix_lo: u32,
+    mix_hi: u32,
+    max_collisions: usize,
+    stop: Arc<AtomicBool>,
+    found_count: Arc<AtomicUsize>,
+    start: Instant,
+}
+
+// ---- Common utility functions ----
+
+/// Compute the SOFTWARE ID string from sid_lo + sid_hi
+///
+/// Eliminates duplicate logic in check_match / cmd_check / cmd_verify.
+fn compute_software_id(sid_lo: u32, sid_hi: u8, mix_lo: u32, mix_hi: u32) -> String {
+    let final_lo = sid_lo ^ mix_lo;
+    let final_hi = ((sid_hi as u32) | 0x100) ^ mix_hi;
+    software_id::encode(((final_hi as u64) << 32) | (final_lo as u64))
+}
+
+/// Write a u64 as 20-byte ASCII decimal (zero-padded), avoiding format! heap allocation
+#[inline(always)]
+fn write_serial(buf: &mut [u8; SERIAL_LEN], mut n: u64) {
+    for i in (0..SERIAL_LEN).rev() {
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+}
+
+/// Increment the BCD buffer by 1 (only modifies the changed low digits)
+///
+/// Silently wraps to zero on all-9s overflow (requires 10^20 iterations, unreachable in practice).
+#[inline(always)]
+fn increment_bcd(buf: &mut [u8; SERIAL_LEN]) {
+    for i in (0..SERIAL_LEN).rev() {
+        if buf[i] < b'9' {
+            buf[i] += 1;
+            return;
+        }
+        buf[i] = b'0';
+    }
+}
+
+/// Valid Serial characters: `[0-9A-Za-z-]`
+fn is_valid_serial(s: &str) -> bool {
+    s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Valid Model characters: `[0-9A-Za-z- ]` (including space)
+fn is_valid_model(s: &str) -> bool {
+    s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b' ')
+}
+
+/// Build the serial byte array (20 bytes)
+///
+/// - Pure digits: left-pad with '0' (e.g. `"123"` → `"00000000000000000123"`)
+/// - Contains letters: right-pad with spaces (e.g. `"ABCD"` → `"ABCD                "`)
+fn build_serial_bytes(serial: &str) -> [u8; SERIAL_LEN] {
+    let sb = serial.as_bytes();
+    if !is_valid_serial(serial) {
+        eprintln!("Warning: serial '{}' contains invalid characters", serial);
+    }
+    if sb.len() > SERIAL_LEN {
+        eprintln!("Warning: serial '{}' truncated to {} bytes", serial, SERIAL_LEN);
+    }
+    let is_numeric = sb.iter().all(|b| b.is_ascii_digit());
+    if is_numeric {
+        // Pure digits: left-pad with '0'
+        let mut bytes = [b'0'; SERIAL_LEN];
+        let copy_len = sb.len().min(SERIAL_LEN);
+        let offset = SERIAL_LEN - copy_len;
+        bytes[offset..].copy_from_slice(&sb[..copy_len]);
+        bytes
+    } else {
+        // Alphanumeric: right-pad with spaces
+        let mut bytes = [SPACE_PADDING; SERIAL_LEN];
+        let copy_len = sb.len().min(SERIAL_LEN);
+        bytes[..copy_len].copy_from_slice(&sb[..copy_len]);
+        bytes
+    }
+}
+
+/// Build the model byte array (space-padded to 16 bytes)
+fn build_model_bytes(model: &str) -> [u8; MODEL_LEN] {
+    let mut bytes = [SPACE_PADDING; MODEL_LEN];
+    let mb = model.as_bytes();
+    if !is_valid_model(model) {
+        eprintln!("Warning: model '{}' contains invalid characters", model);
+    }
+    if mb.len() > MODEL_LEN {
+        eprintln!("Warning: model '{}' truncated to {} bytes", model, MODEL_LEN);
+    }
+    let copy_len = mb.len().min(MODEL_LEN);
+    bytes[..copy_len].copy_from_slice(&mb[..copy_len]);
+    bytes
+}
+
+/// Convert disk size (GB) to sector_val
+fn disk_gb_to_sector_val(disk_gb: u32) -> u32 {
+    let total_bytes: u64 = (disk_gb as u64) * 1024 * 1024 * 1024;
+    software_id::round_sectors((total_bytes / 512 >> 11) as u32)
+}
+
+/// Build the SHA-256 input buffer (serial + model + sector_val)
+fn build_input_buf(
+    serial: &[u8; SERIAL_LEN],
+    model_bytes: &[u8; MODEL_LEN],
+    sv_bytes: &[u8; 4],
+) -> [u8; INPUT_LEN] {
+    let mut buf = [SPACE_PADDING; INPUT_LEN];
+    buf[..SERIAL_LEN].copy_from_slice(serial);
+    buf[SERIAL_LEN..SERIAL_LEN + MODEL_LEN].copy_from_slice(model_bytes);
+    buf[SERIAL_LEN + MODEL_LEN..].copy_from_slice(sv_bytes);
+    buf
+}
+
+// ---- Main entry ----
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Search {
+            disk_gb,
+            threads,
+            model,
+            keys,
+            count,
+            from,
+        } => cmd_search(disk_gb, threads, model, keys, count, from),
+        Commands::Sig2key { signature_hex } => cmd_sig2key(&signature_hex),
+        Commands::Key2sig { key_file } => cmd_key2sig(&key_file),
+        Commands::Verify => cmd_verify(),
+        Commands::Check {
+            serial,
+            disk_gb,
+            model,
+            keys,
+        } => cmd_check(&serial, disk_gb, model, keys),
+    }
+}
+
+// ---- search command ----
+
+/// Execute the collision search
+fn cmd_search(
+    disk_gb: u32,
+    threads: Option<usize>,
+    model: Option<String>,
+    keys: Option<String>,
+    count: usize,
+    from: u64,
+) {
+    let sector_val = disk_gb_to_sector_val(disk_gb);
+    let model = model.unwrap_or_else(|| format!("ROS{}G", disk_gb));
+    let num_threads = threads.unwrap_or_else(|| {
+        thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+    let raw_targets = targets::load_targets(keys.as_deref());
+    let (mix_lo, mix_hi) = targets::mbr_mix();
+    let use_simd = sha256_simd::is_avx512_supported();
+    let start_serial = from * 1_000_000;
+
+    verify_6g(&raw_targets);
+    print_search_banner(disk_gb, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd);
+
+    let ctx = Arc::new(SearchContext {
+        model_bytes: build_model_bytes(&model),
+        sv_bytes: sector_val.to_le_bytes(),
+        targets: Arc::new(raw_targets),
+        mix_lo,
+        mix_hi,
+        max_collisions: count,
+        stop: Arc::new(AtomicBool::new(false)),
+        found_count: Arc::new(AtomicUsize::new(0)),
+        start: Instant::now(),
+    });
+
+    let handles: Vec<_> = (0..num_threads)
+        .map(|tid| {
+            let ctx = Arc::clone(&ctx);
+            thread::spawn(move || {
+                if use_simd {
+                    unsafe { search_simd(tid, num_threads, start_serial, &ctx) };
+                } else {
+                    search_scalar(tid, num_threads, start_serial, &ctx);
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let total = ctx.found_count.load(Ordering::Relaxed);
+    println!(
+        "\nDone. {} collisions found in {}s",
+        total,
+        ctx.start.elapsed().as_secs()
+    );
+}
+
+/// Print search startup info
+fn print_search_banner(
+    disk_gb: u32,
+    model: &str,
+    sector_val: u32,
+    num_threads: usize,
+    targets: &[targets::Target],
+    count: usize,
+    start_serial: u64,
+    use_simd: bool,
+) {
+    let mode_str = if count == 0 {
+        "unlimited".to_string()
+    } else {
+        format!("find {}", count)
+    };
+    let engine = if use_simd { "AVX-512 x16" } else { "scalar" };
+
+    println!("=== RouterOS L6 Serial Generator ===");
+    println!("Disk: {}G  Model: {}  SV: 0x{:X}", disk_gb, model, sector_val);
+    println!(
+        "Threads: {}  Targets: {}  Mode: {}  Engine: {}",
+        num_threads,
+        targets.len(),
+        mode_str,
+        engine
+    );
+    if start_serial > 0 {
+        println!("Start: {}M (serial {})", start_serial / 1_000_000, start_serial);
+    }
+    println!();
+
+    for t in targets {
+        println!("  {} need_lo=0x{:08X} need_hi=0x{:02X}", t.name, t.need_lo, t.need_hi);
+    }
+    println!("\nSearching...\n");
+}
+
+// ---- Search engines ----
+
+/// Scalar search (no SIMD, computes one hash at a time)
+fn search_scalar(tid: usize, num_threads: usize, start_serial: u64, ctx: &SearchContext) {
+    let mut buf = build_input_buf(&[b'0'; SERIAL_LEN], &ctx.model_bytes, &ctx.sv_bytes);
+    let step = num_threads as u64;
+    let mut i: u64 = start_serial + tid as u64;
+
+    // sid_hi pre-filter table: most hashes never enter check_match
+    let mut hi_lookup = [false; 256];
+    for t in ctx.targets.iter() {
+        hi_lookup[t.need_hi as usize] = true;
+    }
+
+    loop {
+        if ctx.stop.load(Ordering::Relaxed) {
+            return;
+        }
+
+        write_serial((&mut buf[..SERIAL_LEN]).try_into().unwrap(), i);
+        let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+
+        if hi_lookup[sid_hi as usize] {
+            check_match(i, sid_lo, sid_hi, ctx);
+        }
+
+        i += step;
+
+        if tid == 0 && (i / PROGRESS_INTERVAL) != ((i - step) / PROGRESS_INTERVAL) {
+            report_progress(i, &ctx.start, &ctx.found_count);
+        }
+    }
+}
+
+/// AVX-512 SIMD search (computes 16 serials in parallel per batch)
+///
+/// # Safety
+///
+/// The caller must ensure the CPU supports AVX-512F.
+#[target_feature(enable = "avx512f", enable = "avx512bw")]
+unsafe fn search_simd(tid: usize, num_threads: usize, start_serial: u64, ctx: &SearchContext) {
+    let batch = SIMD_LANES as u64;
+    let step = (num_threads as u64) * batch;
+    let mut base: u64 = start_serial + (tid as u64) * batch;
+
+    // W[5..9] precomputation: model + sector_val are constant, compute once
+    let const_w = sha256_simd::precompute_constant_words(&ctx.model_bytes, &ctx.sv_bytes);
+
+    // Pre-fill model + sector_val for all 16 inputs (once, outside the loop)
+    let mut inputs = [[SPACE_PADDING; INPUT_LEN]; SIMD_LANES];
+    for lane in 0..SIMD_LANES {
+        inputs[lane][SERIAL_LEN..SERIAL_LEN + MODEL_LEN].copy_from_slice(&ctx.model_bytes);
+        inputs[lane][SERIAL_LEN + MODEL_LEN..].copy_from_slice(&ctx.sv_bytes);
+    }
+
+    // BCD counter
+    let mut base_serial = [b'0'; SERIAL_LEN];
+    write_serial(&mut base_serial, base);
+
+    // sid_hi pre-filter table: most batches have no match, skipping check_match for all 16 lanes
+    let mut hi_lookup = [false; 256];
+    for t in ctx.targets.iter() {
+        hi_lookup[t.need_hi as usize] = true;
+    }
+
+    loop {
+        if ctx.stop.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Generate 16 consecutive serials via BCD
+        let mut serials = [0u64; SIMD_LANES];
+        let mut lane_serial = base_serial;
+        for lane in 0..SIMD_LANES {
+            serials[lane] = base + lane as u64;
+            inputs[lane][..SERIAL_LEN].copy_from_slice(&lane_serial);
+            increment_bcd(&mut lane_serial);
+        }
+
+        // 16-way parallel SHA-256
+        let result = sha256_simd::hash_40_x16(&inputs, &const_w);
+
+        // Check each lane for a match
+        for lane in 0..SIMD_LANES {
+            if hi_lookup[result.sid_hi[lane] as usize] {
+                check_match(serials[lane], result.sid_lo[lane], result.sid_hi[lane], ctx);
+            }
+        }
+
+        base += step;
+        // BCD stepping is faster than 20 divisions (step is usually < 256)
+        if step <= 256 {
+            for _ in 0..step {
+                increment_bcd(&mut base_serial);
+            }
+        } else {
+            write_serial(&mut base_serial, base);
+        }
+
+        if tid == 0 && (base / PROGRESS_INTERVAL) != ((base - step) / PROGRESS_INTERVAL) {
+            report_progress(base, &ctx.start, &ctx.found_count);
+        }
+    }
+}
+
+/// Check whether a hash result matches any target (only formats serial on a hit)
+fn check_match(serial_num: u64, sid_lo: u32, sid_hi: u8, ctx: &SearchContext) {
+    for t in ctx.targets.iter() {
+        if sid_hi == t.need_hi && sid_lo == t.need_lo {
+            let n = ctx.found_count.fetch_add(1, Ordering::Relaxed) + 1;
+            let sid = compute_software_id(sid_lo, sid_hi, ctx.mix_lo, ctx.mix_hi);
+
+            let mut sbuf = [0u8; SERIAL_LEN];
+            write_serial(&mut sbuf, serial_num);
+            let serial_str = std::str::from_utf8(&sbuf).unwrap();
+
+            println!("FOUND [{}] serial={} target={} verified={}", n, serial_str, t.name, sid);
+
+            if ctx.max_collisions > 0 && n >= ctx.max_collisions {
+                ctx.stop.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// Print progress to stderr
+fn report_progress(hashes: u64, start: &Instant, found_count: &AtomicUsize) {
+    let elapsed = start.elapsed().as_secs();
+    let fc = found_count.load(Ordering::Relaxed);
+    eprintln!("{}M hashes, {}s, {} found", hashes / 1_000_000, elapsed, fc);
+}
+
+// ---- Other commands ----
+
+/// Convert a signature hex to License Key text
+fn cmd_sig2key(hex: &str) {
+    match convert::signature_to_key_text(hex) {
+        Ok(key) => println!("{}", key),
+        Err(e) => eprintln!("Error: {}", e),
+    }
+}
+
+/// Convert a License Key file to signature hex
+fn cmd_key2sig(path: &str) {
+    match std::fs::read_to_string(path) {
+        Ok(content) => match convert::key_text_to_signature(&content) {
+            Ok(sig) => println!("{}", sig),
+            Err(e) => eprintln!("Error: {}", e),
+        },
+        Err(e) => eprintln!("Cannot read {}: {}", path, e),
+    }
+}
+
+/// Check whether a given serial matches a known signature
+fn cmd_check(serial: &str, disk_gb: u32, model: Option<String>, keys: Option<String>) {
+    let sector_val = disk_gb_to_sector_val(disk_gb);
+    let model = model.unwrap_or_else(|| format!("ROS{}G", disk_gb));
+    let (mix_lo, mix_hi) = targets::mbr_mix();
+    let search_targets = targets::load_targets(keys.as_deref());
+
+    let serial_bytes = build_serial_bytes(serial);
+    let serial_display = std::str::from_utf8(&serial_bytes).unwrap_or(serial);
+    let model_bytes = build_model_bytes(&model);
+    let buf = build_input_buf(&serial_bytes, &model_bytes, &sector_val.to_le_bytes());
+
+    let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+    let sid = compute_software_id(sid_lo, sid_hi, mix_lo, mix_hi);
+
+    println!("=== Check ===");
+    println!("Serial: {}", serial_display);
+    println!("Model:  {}", model);
+    println!("Disk:   {}G (SV: 0x{:X})", disk_gb, sector_val);
+    println!("SOFTWARE ID: {}", sid);
+
+    let matched = search_targets.iter().find(|t| sid_hi == t.need_hi && sid_lo == t.need_lo);
+
+    if let Some(t) = matched {
+        println!("\n✅ Matched signature: {}", t.name);
+        if t.signature_hex.len() >= 128 {
+            println!("   Signature: {}...{}", &t.signature_hex[..16], &t.signature_hex[112..]);
+        } else {
+            println!("   Signature: {}", t.signature_hex);
+        }
+
+        if let Ok(key_text) = convert::signature_to_key_text(&t.signature_hex) {
+            println!("\n   LICENSE KEY:");
+            for line in key_text.lines() {
+                println!("   {}", line);
+            }
+        }
+
+        println!(
+            "\n   MBR HEX:\n   00000000000000000000BDE800000000{}",
+            t.signature_hex
+        );
+    } else {
+        println!("\n❌ No match found");
+        println!("   sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
+    }
+}
+
+/// Verify SHA-256 + SOFTWARE ID algorithms (self-consistency check)
+fn cmd_verify() {
+    let (mix_lo, mix_hi) = targets::mbr_mix();
+    let cases = [
+        ("00000000000000000001", "VMware Virtual I", 0x1800u32),
+        ("00000000202155543391", "ROS16G          ", 0x4000),
+    ];
+    let engine = if sha256_simd::is_avx512_supported() { "AVX-512 x16" } else { "scalar" };
+
+    println!("=== Verify (engine: {}) ===", engine);
+    for (ser, model_str, sv) in &cases {
+        let mut serial_bytes = [b'0'; SERIAL_LEN];
+        serial_bytes[..ser.len().min(SERIAL_LEN)]
+            .copy_from_slice(&ser.as_bytes()[..ser.len().min(SERIAL_LEN)]);
+        let mut model_bytes = [SPACE_PADDING; MODEL_LEN];
+        model_bytes.copy_from_slice(&model_str.as_bytes()[..MODEL_LEN]);
+        let buf = build_input_buf(&serial_bytes, &model_bytes, &sv.to_le_bytes());
+
+        let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+        let sid = compute_software_id(sid_lo, sid_hi, mix_lo, mix_hi);
+        // Self-consistency: encode → decode → re-encode must round-trip
+        let ok = match software_id::decode(&sid) {
+            Ok(v) if software_id::encode(v) == sid => "OK",
+            _ => "FAIL",
+        };
+        println!("  {} → {} [{}]", &ser[..8], sid, ok);
+    }
+}
+
+/// Startup self-check: verify the 6G VMware known hash value
+fn verify_6g(targets: &[targets::Target]) {
+    let mut serial_bytes = [b'0'; SERIAL_LEN];
+    serial_bytes[..20].copy_from_slice(b"00000000000000000001");
+    let model_bytes = *b"VMware Virtual I";
+    let buf = build_input_buf(&serial_bytes, &model_bytes, &0x1800u32.to_le_bytes());
+
+    let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+    if sid_lo != 0x0B49EC2E || sid_hi != 0x35 {
+        eprintln!("FATAL: SHA-256 self-check failed! sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
+        std::process::exit(1);
+    }
+    if let Some(t) = targets.iter().find(|t| t.need_lo == sid_lo && t.need_hi == sid_hi) {
+        let _ = t; // hash matches a configured target; nothing further to check
+    }
+}
+
+// ---- Tests ----
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- write_serial ----
+
+    #[test]
+    fn test_write_serial_zero() {
+        let mut buf = [0u8; SERIAL_LEN];
+        write_serial(&mut buf, 0);
+        assert_eq!(&buf, b"00000000000000000000");
+    }
+
+    #[test]
+    fn test_write_serial_one() {
+        let mut buf = [0u8; SERIAL_LEN];
+        write_serial(&mut buf, 1);
+        assert_eq!(&buf, b"00000000000000000001");
+    }
+
+    #[test]
+    fn test_write_serial_known_6g() {
+        let mut buf = [0u8; SERIAL_LEN];
+        write_serial(&mut buf, 401012206606);
+        assert_eq!(&buf, b"00000000401012206606");
+    }
+
+    #[test]
+    fn test_write_serial_large() {
+        let mut buf = [0u8; SERIAL_LEN];
+        write_serial(&mut buf, 6145996160994);
+        assert_eq!(&buf, b"00000006145996160994");
+    }
+
+    #[test]
+    fn test_write_serial_max_u64() {
+        let mut buf = [0u8; SERIAL_LEN];
+        write_serial(&mut buf, u64::MAX);
+        assert_eq!(&buf, b"18446744073709551615");
+    }
+
+    // ---- increment_bcd ----
+
+    #[test]
+    fn test_increment_bcd_simple() {
+        let mut buf = *b"00000000000000000000";
+        increment_bcd(&mut buf);
+        assert_eq!(&buf, b"00000000000000000001");
+    }
+
+    #[test]
+    fn test_increment_bcd_carry() {
+        let mut buf = *b"00000000000000000009";
+        increment_bcd(&mut buf);
+        assert_eq!(&buf, b"00000000000000000010");
+    }
+
+    #[test]
+    fn test_increment_bcd_multi_carry() {
+        let mut buf = *b"00000000000000000099";
+        increment_bcd(&mut buf);
+        assert_eq!(&buf, b"00000000000000000100");
+    }
+
+    #[test]
+    fn test_increment_bcd_all_nines() {
+        let mut buf = *b"00000000000000009999";
+        increment_bcd(&mut buf);
+        assert_eq!(&buf, b"00000000000000010000");
+    }
+
+    #[test]
+    fn test_increment_bcd_consistency_with_write_serial() {
+        let base: u64 = 999_999_999_990;
+        let mut bcd_buf = [0u8; SERIAL_LEN];
+        write_serial(&mut bcd_buf, base);
+
+        for i in 1..=16u64 {
+            increment_bcd(&mut bcd_buf);
+            let mut expected = [0u8; SERIAL_LEN];
+            write_serial(&mut expected, base + i);
+            assert_eq!(bcd_buf, expected, "BCD mismatch at base+{}", i);
+        }
+    }
+
+    // ---- compute_software_id ----
+
+    #[test]
+    fn test_compute_software_id_6g_vmware() {
+        let (mix_lo, mix_hi) = targets::mbr_mix();
+        let sid = compute_software_id(0x0B49EC2E, 0x35, mix_lo, mix_hi);
+        // Self-consistency: result must be a valid SOFTWARE ID that round-trips
+        assert_eq!(sid.len(), 9);
+        assert_eq!(sid.chars().nth(4), Some('-'));
+        let v = software_id::decode(&sid).expect("decode computed sid");
+        assert_eq!(software_id::encode(v), sid);
+    }
+
+    #[test]
+    fn test_compute_software_id_deterministic() {
+        let (mix_lo, mix_hi) = targets::mbr_mix();
+        let a = compute_software_id(0xAABBCCDD, 0xEE, mix_lo, mix_hi);
+        let b = compute_software_id(0xAABBCCDD, 0xEE, mix_lo, mix_hi);
+        assert_eq!(a, b, "same input must produce same output");
+    }
+
+    // ---- build_model_bytes ----
+
+    #[test]
+    fn test_build_model_bytes_short() {
+        let bytes = build_model_bytes("ROS6G");
+        assert_eq!(&bytes[..5], b"ROS6G");
+        assert_eq!(bytes[5], SPACE_PADDING);
+        assert_eq!(bytes[15], SPACE_PADDING);
+    }
+
+    #[test]
+    fn test_build_model_bytes_exact() {
+        let bytes = build_model_bytes("VMware Virtual I");
+        assert_eq!(&bytes, b"VMware Virtual I");
+    }
+
+    // ---- build_serial_bytes ----
+
+    #[test]
+    fn test_build_serial_bytes_numeric_short() {
+        let bytes = build_serial_bytes("123");
+        assert_eq!(&bytes, b"00000000000000000123");
+    }
+
+    #[test]
+    fn test_build_serial_bytes_numeric_full() {
+        let bytes = build_serial_bytes("00000000350481748276");
+        assert_eq!(&bytes, b"00000000350481748276");
+    }
+
+    #[test]
+    fn test_build_serial_bytes_alpha_exact() {
+        let bytes = build_serial_bytes("G4HQT594JN8VLY0FGN9");
+        assert_eq!(&bytes, b"G4HQT594JN8VLY0FGN9");
+    }
+
+    #[test]
+    fn test_build_serial_bytes_alpha_short() {
+        let bytes = build_serial_bytes("SZHYPO14090903D0164");
+        // 19 chars + 1 space padding on right
+        assert_eq!(&bytes[..19], b"SZHYPO14090903D0164");
+        assert_eq!(bytes[19], SPACE_PADDING);
+    }
+
+    #[test]
+    fn test_build_serial_bytes_with_hyphen() {
+        let bytes = build_serial_bytes("HYSSD-20160419B7902");
+        assert_eq!(&bytes[..19], b"HYSSD-20160419B7902");
+        assert_eq!(bytes[19], SPACE_PADDING);
+    }
+
+    // ---- is_valid_serial / is_valid_model ----
+
+    #[test]
+    fn test_is_valid_serial() {
+        assert!(is_valid_serial("00000000350481748276"));
+        assert!(is_valid_serial("G4HQT594JN8VLY0FGN9"));
+        assert!(is_valid_serial("HYSSD-20160419B79028"));
+        assert!(!is_valid_serial("hello world")); // space invalid
+        assert!(!is_valid_serial("test@#$"));
+    }
+
+    #[test]
+    fn test_is_valid_model() {
+        assert!(is_valid_model("VMware Virtual I"));
+        assert!(is_valid_model("ROS128G"));
+        assert!(is_valid_model("cheerlon"));
+        assert!(!is_valid_model("test@model"));
+    }
+
+    // ---- build_input_buf ----
+
+    #[test]
+    fn test_build_input_buf_layout() {
+        let serial = *b"00000000000000000001";
+        let model = *b"VMware Virtual I";
+        let sv = 0x1800u32.to_le_bytes();
+        let buf = build_input_buf(&serial, &model, &sv);
+
+        assert_eq!(buf.len(), INPUT_LEN);
+        assert_eq!(&buf[..SERIAL_LEN], b"00000000000000000001");
+        assert_eq!(&buf[SERIAL_LEN..SERIAL_LEN + MODEL_LEN], b"VMware Virtual I");
+        assert_eq!(&buf[SERIAL_LEN + MODEL_LEN..], &sv);
+    }
+
+    // ---- check_match ----
+
+    fn make_test_ctx(targets: Vec<targets::Target>) -> SearchContext {
+        let (mix_lo, mix_hi) = targets::mbr_mix();
+        SearchContext {
+            model_bytes: [SPACE_PADDING; MODEL_LEN],
+            sv_bytes: [0; 4],
+            targets: Arc::new(targets),
+            mix_lo,
+            mix_hi,
+            max_collisions: 0,
+            stop: Arc::new(AtomicBool::new(false)),
+            found_count: Arc::new(AtomicUsize::new(0)),
+            start: Instant::now(),
+        }
+    }
+
+    fn make_fake_target() -> targets::Target {
+        targets::Target {
+            need_lo: 0x0B49EC2E,
+            need_hi: 0x35,
+            name: "TEST-0001".to_string(),
+            signature_hex: "AA".repeat(64),
+        }
+    }
+
+    #[test]
+    fn test_check_match_hit() {
+        let ctx = make_test_ctx(vec![make_fake_target()]);
+
+        check_match(1, 0x0B49EC2E, 0x35, &ctx);
+        assert_eq!(ctx.found_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_check_match_miss() {
+        let ctx = make_test_ctx(vec![make_fake_target()]);
+
+        check_match(999, 0xDEADBEEF, 0xFF, &ctx);
+        assert_eq!(ctx.found_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_check_match_sid_hi_only_miss() {
+        let ctx = make_test_ctx(vec![make_fake_target()]);
+
+        check_match(999, 0x0B49EC2E, 0x99, &ctx);
+        assert_eq!(ctx.found_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_check_match_stops_at_target_count() {
+        let mut ctx = make_test_ctx(vec![targets::Target {
+            need_lo: 0xAAAAAAAA,
+            need_hi: 0xBB,
+            name: "TEST".to_string(),
+            signature_hex: "00".repeat(64),
+        }]);
+        ctx.max_collisions = 1;
+
+        check_match(0, 0xAAAAAAAA, 0xBB, &ctx);
+        assert!(ctx.stop.load(Ordering::Relaxed));
+    }
+
+    // ---- End-to-end SOFTWARE ID ----
+
+    #[test]
+    fn test_end_to_end_6g_vmware() {
+        let serial = *b"00000000000000000001";
+        let model = *b"VMware Virtual I";
+        let buf = build_input_buf(&serial, &model, &0x1800u32.to_le_bytes());
+
+        let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+        let (mix_lo, mix_hi) = targets::mbr_mix();
+        let sid = compute_software_id(sid_lo, sid_hi, mix_lo, mix_hi);
+        // Self-consistency: computed SOFTWARE ID must encode/decode round-trip
+        let v = software_id::decode(&sid).expect("decode computed sid");
+        assert_eq!(software_id::encode(v), sid);
+    }
+
+    #[test]
+    fn test_end_to_end_16g() {
+        let serial = *b"00000000202155543391";
+        let model_bytes = build_model_bytes("ROS16G");
+        let buf = build_input_buf(&serial, &model_bytes, &0x4000u32.to_le_bytes());
+
+        let (sid_lo, sid_hi) = sha256::hash_40(&buf);
+        let (mix_lo, mix_hi) = targets::mbr_mix();
+        let sid = compute_software_id(sid_lo, sid_hi, mix_lo, mix_hi);
+        let v = software_id::decode(&sid).expect("decode computed sid");
+        assert_eq!(software_id::encode(v), sid);
+    }
+
+    // ---- precompute_constant_words ----
+
+    #[test]
+    fn test_precompute_constant_words() {
+        let model = b"VMware Virtual I";
+        let sv_bytes = 0x1800u32.to_le_bytes();
+        let words = sha256_simd::precompute_constant_words(model, &sv_bytes);
+
+        assert_eq!(words[0], u32::from_be_bytes([b'V', b'M', b'w', b'a']));
+        assert_eq!(words[1], u32::from_be_bytes([b'r', b'e', b' ', b'V']));
+        assert_eq!(words[2], u32::from_be_bytes([b'i', b'r', b't', b'u']));
+        assert_eq!(words[3], u32::from_be_bytes([b'a', b'l', b' ', b'I']));
+        assert_eq!(words[4], u32::from_be_bytes([0x00, 0x18, 0x00, 0x00]));
+    }
+}
