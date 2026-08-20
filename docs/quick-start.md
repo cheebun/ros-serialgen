@@ -10,7 +10,7 @@ Deploy a licensed RouterOS L6 virtual machine on Proxmox VE using a pre-computed
 - RouterOS x86 ISO uploaded to PVE storage ([download](https://mikrotik.com/download))
 - `ros-serialgen` binary built (`cargo build --release`)
 
-> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first.
+> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first. For a flag-by-flag explanation of every command, see [command-reference.md](command-reference.md).
 
 ---
 
