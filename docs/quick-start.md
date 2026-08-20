@@ -69,13 +69,13 @@ Example uses the 6G collision (`6442450944` bytes, model `ROS6G`, serial `000000
 
 ```bash
 mkdir -p /var/lib/vz/images/100
-qemu-img create -f qcow2 /var/lib/vz/images/100/vm-100-disk.qcow2 6442450944
+qemu-img create -f qcow2 /var/lib/vz/images/100/vm-100-disk-1.qcow2 6442450944
 ```
 
 Attach with serial and model:
 
 ```bash
-qm set 100 --ide0 local:100/vm-100-disk.qcow2,model=ROS6G,serial=00000000401012206606
+qm set 100 --ide0 local:100/vm-100-disk-1.qcow2,model=ROS6G,serial=00000000401012206606
 ```
 
 > If your model contains spaces (e.g. `VMware Virtual IDE Hard Drive`), URL-encode them as `%20` -- see [deployment-guide.md](deployment-guide.md#model-names-containing-spaces).
@@ -97,7 +97,7 @@ Look up the signature for your SOFTWARE ID in the [Signature Table](collision-da
 
 ```bash
 modprobe nbd max_part=8
-qemu-nbd --connect=/dev/nbd0 /var/lib/vz/images/100/vm-100-disk.qcow2
+qemu-nbd --connect=/dev/nbd0 /var/lib/vz/images/100/vm-100-disk-1.qcow2
 sleep 1
 
 echo -n "00000000000000000000BDE800000000F4E11772DEEAED8AF43668DA5EBDAD0846B694FFE9E77EFAE77E11A6049E4303B0B09DCEF8D9A647D643D1BAD4AF13B9659CCB11A06D3A9080096634E4E88B07" | xxd -r -p | dd of=/dev/nbd0 bs=1 seek=256 count=80 conv=notrunc

@@ -73,7 +73,7 @@ qm set 100 --delete scsi0 2>/dev/null
 
 # Create qcow2 with exact size
 mkdir -p /var/lib/vz/images/100
-qemu-img create -f qcow2 /var/lib/vz/images/100/vm-100-disk.qcow2 6442450944
+qemu-img create -f qcow2 /var/lib/vz/images/100/vm-100-disk-1.qcow2 6442450944
 ```
 
 ### Backend B: LVM Storage (e.g. `local-lvm`)
@@ -114,7 +114,7 @@ Use `qm set` to attach the disk with the serial and model from your collision en
 
 ```bash
 # Directory storage
-qm set 100 --ide0 local:100/vm-100-disk.qcow2,model=ROS6G,serial=00000000401012206606
+qm set 100 --ide0 local:100/vm-100-disk-1.qcow2,model=ROS6G,serial=00000000401012206606
 
 # LVM storage (volume already created above)
 qm set 100 --ide0 local-lvm:vm-100-disk-0,model=ROS6G,serial=00000000401012206606
@@ -125,7 +125,7 @@ qm set 100 --ide0 local-lvm:vm-100-disk-0,model=ROS6G,serial=0000000040101220660
 PVE's property-string parser (used by `qm set`) rejects literal spaces and shell quoting -- `model="VMware Virtual IDE Hard Drive"` fails with `invalid format - format error`. Use URL encoding (`%20`) instead:
 
 ```bash
-qm set 100 --ide0 local:100/vm-100-disk.qcow2,model=VMware%20Virtual%20IDE%20Hard%20Drive,serial=00000000000000000001
+qm set 100 --ide0 local:100/vm-100-disk-1.qcow2,model=VMware%20Virtual%20IDE%20Hard%20Drive,serial=00000000000000000001
 ```
 
 PVE decodes `%20` back to a literal space before generating the underlying QEMU `-device` argument. Verify both sides:
@@ -165,7 +165,7 @@ Example uses the C7CU-PGT9 signature; substitute the row for your own SOFTWARE I
 
 ```bash
 modprobe nbd max_part=8
-qemu-nbd --connect=/dev/nbd0 /var/lib/vz/images/100/vm-100-disk.qcow2
+qemu-nbd --connect=/dev/nbd0 /var/lib/vz/images/100/vm-100-disk-1.qcow2
 sleep 1
 
 echo -n "00000000000000000000BDE800000000F4E11772DEEAED8AF43668DA5EBDAD0846B694FFE9E77EFAE77E11A6049E4303B0B09DCEF8D9A647D643D1BAD4AF13B9659CCB11A06D3A9080096634E4E88B07" | xxd -r -p | dd of=/dev/nbd0 bs=1 seek=256 count=80 conv=notrunc
