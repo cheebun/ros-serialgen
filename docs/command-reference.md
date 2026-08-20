@@ -46,4 +46,12 @@ Positional argument: path to a `.key` file containing MikroTik key text. Outputs
 
 ## `ros-serialgen verify`
 
-No arguments. Runs the algorithm's built-in self-check against known test vectors and prints pass/fail.
+```bash
+ros-serialgen verify
+```
+
+No arguments, no `keys.toml` needed -- this is a self-contained sanity check, unrelated to real signatures or collision search.
+
+Runs the full SOFTWARE ID pipeline (custom SHA-256 -> MBR mix XOR -> Base-35 encode) against two fixed, hardcoded (serial, model, sector_val) test vectors, then checks that the result round-trips correctly through `encode -> decode -> re-encode`. Also prints which hash engine is active (`AVX-512 x16` or `scalar`), so you can confirm SIMD acceleration is being used on the current machine.
+
+Run this once after building, or after moving to a different machine/CPU, before trusting `search` output.
