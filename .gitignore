@@ -4,3 +4,4 @@ Cargo.lock
 *.swo
 .DS_Store
 keys.toml
+PRIVATE-*.md

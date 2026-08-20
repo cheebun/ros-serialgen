@@ -77,12 +77,41 @@ To search for a new disk size (see [command-reference.md](command-reference.md) 
 ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 ```
 
+### 128M
+
+| Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
+|---|---|---|---|---|
+| 134,217,728 | `ROS128M` | `00000000165831092202` | WUB2-EYCK | Y |
+| 134,217,728 | `ROS128M` | `00000000545657840722` | 4MZF-SFTR | Y |
+| 134,217,728 | `ROS128M` | `00000000912202092841` | WUB2-EYCK | Y |
+| 134,217,728 | `ROS128M` | `00000000935109144017` | C7CU-PGT9 | Y |
+| 134,217,728 | `ROS128M` | `00000001017893085552` | HHJH-UFWL | Y |
+| 134,217,728 | `ROS128M` | `00000001336016200470` | ZJ3M-ESHW | Y |
+| 134,217,728 | `ROS128M` | `00000001503345396155` | HHJH-UFWL | Y |
+| 134,217,728 | `ROS128M` | `00000001506004527558` | 4MZF-SFTR | Y |
+| 134,217,728 | `ROS128M` | `00000001840421887299` | C7CU-PGT9 | Y |
+| 134,217,728 | `ROS128M` | `00000002127924138244` | 4MZF-SFTR | Y |
+| 134,217,728 | `ROS128M` | `00000002420150096337` | ZJ3M-ESHW | Y |
+| 134,217,728 | `ROS128M` | `00000002483780222610` | HHJH-UFWL | Y |
+| 134,217,728 | `ROS128M` | `00000002624667406370` | HHJH-UFWL | Y |
+
+### 256M
+
+| Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
+|---|---|---|---|---|
+| 268,435,456 | `ROS256M` | `00000000102906024119` | TI09-7WK3 | Y |
+
 ### 1G
 
 | Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
 |---|---|---|---|---|
 | 1,073,741,824 | `SSD1G` | `00000000251582663387` | TI09-7WK3 | Y |
 | 1,073,741,824 | `SSD1G` | `00000000394825144904` | TI09-7WK3 | Y |
+| 1,073,741,824 | `SSD1G` | `00000000512110725538` | ZJ3M-ESHW | Y |
+| 1,073,741,824 | `SSD1G` | `00000000518100187137` | ZJ3M-ESHW | Y |
+| 1,073,741,824 | `SSD1G` | `00000000598477772702` | ZJ3M-ESHW | Y |
+| 1,073,741,824 | `SSD1G` | `00000000717959548436` | 4MZF-SFTR | Y |
+| 1,073,741,824 | `SSD1G` | `00000000867939265457` | HCC0-4FJR | Y |
 
 ### 6G
 
@@ -202,7 +231,6 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 
 | Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
 |---|---|---|---|---|
-| 64,023,257,088 | `SSD64G2016` | `HYSSD-20160419B79028` | C7CU-PGT9 | Y |
 | 68,719,476,736 | `ROS64G` | `00000000350481748276` | C7CU-PGT9 | Y |
 | 68,719,476,736 | `ROS64G` | `00000000508223321551` | HHJH-UFWL | Y |
 | 68,719,476,736 | `ROS64G` | `00000000585368148602` | 4MZF-SFTR | Y |

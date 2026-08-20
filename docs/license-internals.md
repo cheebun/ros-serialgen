@@ -151,6 +151,59 @@ Examples:
 | 8G (7.38 GiB) | 0xEBFD10 | 0x1D7F | 0x1E00 | Rounded up |
 | 64G | 0x7740AB0 | 0xEE81 | 0xF000 | Rounded up |
 
+### 3.5 Binary-Level Verification
+
+Sections 3.2-3.4 were re-verified directly against `tools/bin/keyman_7.23.2` (ELF 32-bit LSB, Intel 80386, stripped) via raw byte search + `objdump -d` disassembly, rather than relying solely on repeated real-hardware test results. Every value below cites the actual file offset / instruction.
+
+**SHA-256 constant tables -- exact byte match**
+
+Searching the binary for the IV and round-constant words (as little-endian byte sequences) finds them contiguous in `.rodata`:
+
+| Constant | File offset | Runtime VMA |
+|---|---|---|
+| `IV[0] = 0x5B653932` | `0xc7e0` | `0x080547E0` |
+| `IV[1] = 0x7B145F8F` | `0xc7e4` | `0x080547E4` |
+| `K[0] = 0x0548D563` | `0xc800` | `0x08054800` |
+| `K[1] = 0x98308EAB` | `0xc804` | `0x08054804` |
+
+(`VMA = file_offset + 0x08048000`, confirmed by cross-checking against the `.rodata` section's own VMA range from `objdump -h`.) The disassembly loads these addresses directly: `movl $0x80547e0, %esi` / `movl $0x8054800, %edi` at the entry of the compression-round function.
+
+**Round function -- rotate amounts match `Σ0/Σ1/σ0/σ1`**
+
+The compression loop uses `rorl $0x6` / `rorl $0xb` / `roll $0x7` (`roll 7` == `rotr 25`) for `Σ1(e)`, and `roll $0xe` (`rotr 18`) / `rorl $0x7` / `shrl $0x3` for `σ0`, matching `sha256.rs`'s `rotate_right(6/11/25)` and `(7/18/3)` exactly.
+
+**`mbr_val` formula -- confirmed instruction-by-instruction**
+
+A dedicated function calls the SHA-256 wrapper with `ecx=0xa` (10 bytes -- the `mbr_10` identity seed), then:
+
+```asm
+movzwl -0x28(%ebp), %esi   ; esi = digest[0:2] as u16  (sha_val)
+testl  %esi, %esi
+jne    skip
+movl   $0x1eef, %esi       ; if sha_val == 0, substitute 0x1EEF (undocumented edge case)
+skip:
+movl   %ebx, %eax
+calll  <checksum_fn>       ; 0x804bf80
+xorl   %esi, %eax          ; mbr_val_16 = sha_val XOR chksum
+```
+
+The checksum function at `0x804bf80` reads five little-endian `u16` words, sums them, and returns `~sum & 0xFFFF` (short-circuited to `0xFFFF` directly if every word is zero -- numerically a no-op, since `~0 & 0xFFFF` is `0xFFFF` anyway). This is exactly `chksum = NOT(sum_of_5_LE_uint16(mbr_10)) & 0xFFFF` from 3.2, confirmed opcode-by-opcode rather than inferred.
+
+**SOFTWARE ID input buffer -- confirmed 40-byte layout**
+
+At `0x8050a9b`: `movl $0x28, %ecx` (0x28 = 40) immediately precedes a call to the SHA-256 wrapper -- this is the SOFTWARE ID hash from 3.1/3.2. Walking backward from this call, two NUL-to-space sanitization loops bound the buffer:
+
+```
+offset 0x00-0x13 (20 bytes): first loop bound  -- the serial field
+offset 0x14-0x23 (16 bytes): second loop bound -- the model field
+```
+
+i.e. the buffer is laid out as `serial[20] || model[16]` starting at offset 0, immediately followed by `sector_val` to reach 40 bytes total -- an exact match for `main.rs`'s `SERIAL_LEN=20`, `MODEL_LEN=16`, `INPUT_LEN=40`, and field order. The model truncation documented in 3.1 is not a limitation of this project's tooling; it is the fixed size of keyman's own on-stack buffer, visible directly in its machine code.
+
+A related debug format string found in the binary confirms the same field widths independently of the disassembly: `"%s: hdd-model='%.16s' s='%.20s' sz=%d MB"` -- `%.16s` for model, `%.20s` for serial.
+
+**Empirically confirmed on a real VM**: PVE VM running the ER1G-WVEL MBR (2G, `serial=00000000000000000001`) was booted twice -- once with `model=VMware Virtual IDE Hard Drive` (29 chars) and once with `model=VMware Virtual I` (the 16-char truncation) -- both produced an identical `/system license print` result. This matches the disassembly's prediction exactly: bytes past the 16th are read from the disk's IDENTIFY response but never copied into keyman's hash input buffer, so they cannot affect the SOFTWARE ID.
+
 ---
 
 ## 4. Three Forms of a License

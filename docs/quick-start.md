@@ -20,6 +20,7 @@ Pick your disk size from the table below. For sizes not listed, see the [full co
 
 | Disk Size | Bytes | Serial | Model | SOFTWARE ID |
 |---|---|---|---|---|
+| 128M | 134,217,728 | `00000000545657840722` | `ROS128M` | 4MZF-SFTR |
 | 1G | 1,073,741,824 | `00000000251582663387` | `SSD1G` | TI09-7WK3 |
 | 6G | 6,442,450,944 | `00000000401012206606` | `ROS6G` | C7CU-PGT9 |
 | 8G | 8,589,934,592 | `00000000106987476296` | `ROS8G` | 4MZF-SFTR |

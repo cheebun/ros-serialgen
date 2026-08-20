@@ -891,8 +891,9 @@ mod tests {
 
     #[test]
     fn test_build_serial_bytes_alpha_exact() {
+        // 19-char alphanumeric serial: right-padded with one trailing space to fill SERIAL_LEN (20)
         let bytes = build_serial_bytes("G4HQT594JN8VLY0FGN9");
-        assert_eq!(&bytes, b"G4HQT594JN8VLY0FGN9");
+        assert_eq!(&bytes, b"G4HQT594JN8VLY0FGN9 ");
     }
 
     #[test]
