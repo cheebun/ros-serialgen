@@ -34,10 +34,10 @@ Pick your disk size from the table below. For sizes not listed, see the [full co
 
 All entries above use space-free model names, so no `%20` encoding is needed.
 
-For unlisted sizes, search for a new collision (see [command-reference.md](command-reference.md) for what each flag does):
+For unlisted sizes, search for a new collision (see [command-reference.md](command-reference.md) for what each flag does; sub-1GB sizes are supported via `-u m/k/b`, minimum 64MB):
 
 ```bash
-ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 ```
 
 ---

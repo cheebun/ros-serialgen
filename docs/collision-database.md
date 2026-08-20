@@ -71,10 +71,10 @@ Five valid L6 signatures have been recovered. Each signature is valid for any di
 
 Choose your desired disk size. Note the **Serial**, **Model**, and **SOFTWARE ID**, then follow the deployment guide.
 
-To search for a new disk size:
+To search for a new disk size (see [command-reference.md](command-reference.md) for the `-u` unit flag; sub-1GB sizes down to 64MB are supported via `-u m/k/b`):
 
 ```bash
-ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 ```
 
 ### 1G

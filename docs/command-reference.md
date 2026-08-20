@@ -9,31 +9,47 @@ For PVE/QEMU deployment commands (`qm`, `qemu-img`, `qemu-nbd`, `dd`, `lvcreate`
 ## `ros-serialgen search`
 
 ```bash
-ros-serialgen search -s 100 -t 16 -c 0 -k keys.toml
+ros-serialgen search -s 100 -u g -t 16 -c 0 -k keys.toml
+ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
 ```
 
 | Flag | Long form | Meaning |
 |---|---|---|
-| `-s <GB>` | `--disk-gb <GB>` | Disk size in gigabytes. Determines `sector_val` -- must match the disk you'll actually create. **Required.** |
+| `-s <N>` | `--disk-size <N>` | Disk size magnitude, paired with `-u`/`--unit`. Determines `sector_val` -- must match the disk you'll actually create. **Required.** |
+| `-u <unit>` | `--unit <unit>` | Unit for `-s`: `g` (gigabytes, default), `m` (megabytes), `k` (kilobytes), or `b` (raw bytes). Case-insensitive. |
 | `-t <N>` | `--threads <N>` | Number of search threads. Defaults to all available CPU cores if omitted. |
-| `-m <name>` | `--model <name>` | Disk model string to search under. Defaults to `ROS<GB>G` (e.g. `ROS100G`) if omitted. |
+| `-m <name>` | `--model <name>` | Disk model string to search under. Defaults to `ROS<N><unit>` (e.g. `ROS100G`, `ROS128M`) if omitted. |
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 | `-c <N>` | `--count <N>` | Number of collisions to find before stopping. `1` (default) stops at the first hit; `0` runs until interrupted (Ctrl+C), collecting every hit. |
 | `-f <N>` | `--from <N>` | Resume the search from N million hashes in, matching the `M` value printed in progress output. Defaults to `0` (start from the beginning). |
+
+### Minimum disk size per unit
+
+Each unit has a separate minimum, all equivalent to 64 MB, enforced at startup (the process exits with an error if violated):
+
+| Unit | Minimum `-s` value |
+|---|---|
+| `g` | `1` (1 GB) |
+| `m` | `64` (64 MB) |
+| `k` | `65536` (64 MB in KB) |
+| `b` | `67108864` (64 MB in bytes) |
+
+Decimal sizes are not supported (`-s` is an integer) -- fractional GB values must be expressed in a smaller unit instead, e.g. `-s 1536 -u m` for 1.5 GB. This avoids floating-point rounding errors in the byte-exact `sector_val` calculation.
 
 Progress is logged every 10,000M (10 billion) hashes, e.g. `10000M hashes, 5s, 0 found`. At ~2000M hash/s (AVX-512) that's roughly every 5 seconds; at ~100M hash/s (scalar) roughly every 100 seconds.
 
 ## `ros-serialgen check`
 
 ```bash
-ros-serialgen check --serial 00000000090681934458 -s 24 -m cheerlon
+ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
 ```
 
 | Flag | Long form | Meaning |
 |---|---|---|
 | `--serial <value>` | -- | The 20-character serial number to verify. **Required.** No short form (`-s` is reserved for disk size). |
-| `-s <GB>` | `--disk-gb <GB>` | Disk size in gigabytes used to compute `sector_val`. **Required.** |
-| `-m <name>` | `--model <name>` | Disk model string. Defaults to `ROS<GB>G` if omitted. |
+| `-s <N>` | `--disk-size <N>` | Disk size magnitude, paired with `-u`/`--unit`. **Required.** |
+| `-u <unit>` | `--unit <unit>` | Unit for `-s`: `g` (gigabytes, default), `m` (megabytes), `k` (kilobytes), or `b` (raw bytes). Same minimums as `search` above. |
+| `-m <name>` | `--model <name>` | Disk model string. Defaults to `ROS<N><unit>` if omitted. |
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 
 Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex.

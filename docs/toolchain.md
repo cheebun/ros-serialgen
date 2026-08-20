@@ -25,22 +25,27 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release
 
 ### Search
 
+`-s` is a magnitude paired with `-u` (unit: `g`/`m`/`k`/`b`, default `g`). Minimum size is 64MB in any unit -- see [command-reference.md](command-reference.md).
+
 ```bash
 # Search for a collision at a given disk size
-ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
+
+# Sub-1GB sizes
+ros-serialgen search -s 128 -u m -t <threads> -c 0 -k keys.toml
 
 # Resume from checkpoint
-ros-serialgen search -s <GB> -t <threads> -c 0 -f <progress_M> -k keys.toml
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -f <progress_M> -k keys.toml
 
 # Background execution
-nohup ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml \
+nohup ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml \
   > /tmp/results.txt 2> /tmp/progress.txt &
 ```
 
 ### Verify
 
 ```bash
-ros-serialgen check --serial <Serial> -s <GB>
+ros-serialgen check --serial <Serial> -s <N> -u <g|m|k|b>
 ```
 
 ### Test

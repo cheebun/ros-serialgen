@@ -23,9 +23,16 @@ cargo build --release
 
 ### Search for collisions
 
+`-s` takes a magnitude, `-u` sets its unit (`g` gigabytes/default, `m` megabytes, `k` kilobytes, `b` bytes). Minimum size is 64 MB regardless of unit (`-s 1 -u g`, `-s 64 -u m`, `-s 65536 -u k`, `-s 67108864 -u b`).
+
 ```bash
-# Find 1 collision (default)
+# Find 1 collision (default), 100 GB
 ros-serialgen search -s 100 -t 16
+
+# Sub-1GB sizes: 128 / 256 / 512 MB
+ros-serialgen search -s 128 -u m -t 16
+ros-serialgen search -s 256 -u m -t 16
+ros-serialgen search -s 512 -u m -t 16
 
 # Find 4 collisions (one per SOFTWARE ID)
 ros-serialgen search -s 6 -t 16 -c 4
@@ -53,6 +60,8 @@ FOUND [1] serial=00000000418756277141 target=TEST-0001 verified=TEST-0001
 ```bash
 ros-serialgen check --serial 00000000090681934458 -s 24 -m cheerlon
 ```
+
+`check` accepts the same `-s`/`-u` disk size flags as `search`.
 
 On a match, prints the SOFTWARE ID, License Key, and MBR HEX.
 
@@ -92,7 +101,7 @@ More keys = faster search (linear speedup).
 ├── README.md
 ├── CLAUDE.md / AGENTS.md    AI tool instructions
 └── src/
-    ├── main.rs              CLI entry + multi-threaded search engine + 31 unit tests
+    ├── main.rs              CLI entry + multi-threaded search engine + 41 unit tests
     ├── sha256_constants.rs  MikroTik SHA-256 shared constants (IV + K)
     ├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
     ├── sha256_simd.rs       AVX-512 SIMD 16-way parallel SHA-256
@@ -119,7 +128,7 @@ SIMD optimization highlights:
 ## Testing
 
 ```bash
-cargo test          # 31 unit tests
+cargo test          # 49 unit tests
 cargo clippy        # zero warnings
 cargo fmt --check   # format check
 ```

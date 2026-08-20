@@ -48,13 +48,16 @@ struct Cli {
 enum Commands {
     /// Search collision serial for a disk size
     Search {
-        /// Disk size in GB
-        #[arg(short = 's', long)]
-        disk_gb: u32,
+        /// Disk size magnitude (paired with --unit)
+        #[arg(short = 's', long = "disk-size")]
+        disk_size: u64,
+        /// Disk size unit: g (gigabytes, default), m (megabytes), k (kilobytes), or b (bytes)
+        #[arg(short = 'u', long, value_enum, ignore_case = true, default_value = "g")]
+        unit: SizeUnit,
         /// Thread count
         #[arg(short, long)]
         threads: Option<usize>,
-        /// Model name (default: ROS<GB>G)
+        /// Model name (default: ROS<size><unit>, e.g. ROS100G, ROS128M)
         #[arg(short, long)]
         model: Option<String>,
         /// keys.toml path
@@ -84,16 +87,87 @@ enum Commands {
         /// Serial number (20-digit string)
         #[arg(long)]
         serial: String,
-        /// Disk size in GB
-        #[arg(short = 's', long)]
-        disk_gb: u32,
-        /// Model name (default: ROS<GB>G)
+        /// Disk size magnitude (paired with --unit)
+        #[arg(short = 's', long = "disk-size")]
+        disk_size: u64,
+        /// Disk size unit: g (gigabytes, default), m (megabytes), k (kilobytes), or b (bytes)
+        #[arg(short = 'u', long, value_enum, ignore_case = true, default_value = "g")]
+        unit: SizeUnit,
+        /// Model name (default: ROS<size><unit>, e.g. ROS100G, ROS128M, ROS67108864B)
         #[arg(short, long)]
         model: Option<String>,
         /// keys.toml path
         #[arg(short, long)]
         keys: Option<String>,
     },
+}
+
+/// Disk size unit, paired with the `--disk-size` magnitude
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SizeUnit {
+    /// Gigabytes (1024^3 bytes)
+    G,
+    /// Megabytes (1024^2 bytes)
+    M,
+    /// Kilobytes (1024^1 bytes)
+    K,
+    /// Raw bytes
+    B,
+}
+
+impl SizeUnit {
+    /// Number of bytes in one unit
+    fn bytes_per_unit(self) -> u64 {
+        match self {
+            SizeUnit::G => 1024 * 1024 * 1024,
+            SizeUnit::M => 1024 * 1024,
+            SizeUnit::K => 1024,
+            SizeUnit::B => 1,
+        }
+    }
+
+    /// Uppercase letter used in size labels (e.g. "128M", "100G", "65536K", "67108864B") and default model names
+    fn label_char(self) -> char {
+        match self {
+            SizeUnit::G => 'G',
+            SizeUnit::M => 'M',
+            SizeUnit::K => 'K',
+            SizeUnit::B => 'B',
+        }
+    }
+
+    /// Minimum allowed magnitude for this unit -- all equivalent to 64M
+    fn min_magnitude(self) -> u64 {
+        match self {
+            SizeUnit::G => 1,
+            SizeUnit::M => 64,
+            SizeUnit::K => 64 * 1024,
+            SizeUnit::B => 64 * 1024 * 1024,
+        }
+    }
+}
+
+/// Reject disk sizes below the minimum for their unit (all equivalent to 64M). Exits the process on violation.
+fn validate_disk_size(magnitude: u64, unit: SizeUnit) {
+    let min = unit.min_magnitude();
+    if magnitude < min {
+        eprintln!(
+            "Error: disk size {}{} is below the minimum for unit '{}' (must be >= {}{})",
+            magnitude,
+            unit.label_char(),
+            unit.label_char(),
+            min,
+            unit.label_char()
+        );
+        std::process::exit(1);
+    }
+}
+
+/// Compute exact disk size in bytes and a display label (e.g. "128M", "100G", "65536K", "67108864B")
+fn disk_size_bytes_and_label(magnitude: u64, unit: SizeUnit) -> (u64, String) {
+    let bytes = magnitude * unit.bytes_per_unit();
+    let label = format!("{}{}", magnitude, unit.label_char());
+    (bytes, label)
 }
 
 // ---- Search context ----
@@ -199,9 +273,8 @@ fn build_model_bytes(model: &str) -> [u8; MODEL_LEN] {
     bytes
 }
 
-/// Convert disk size (GB) to sector_val
-fn disk_gb_to_sector_val(disk_gb: u32) -> u32 {
-    let total_bytes: u64 = (disk_gb as u64) * 1024 * 1024 * 1024;
+/// Convert an exact disk size in bytes to sector_val
+fn disk_bytes_to_sector_val(total_bytes: u64) -> u32 {
     software_id::round_sectors((total_bytes / 512 >> 11) as u32)
 }
 
@@ -224,22 +297,24 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Search {
-            disk_gb,
+            disk_size,
+            unit,
             threads,
             model,
             keys,
             count,
             from,
-        } => cmd_search(disk_gb, threads, model, keys, count, from),
+        } => cmd_search(disk_size, unit, threads, model, keys, count, from),
         Commands::Sig2key { signature_hex } => cmd_sig2key(&signature_hex),
         Commands::Key2sig { key_file } => cmd_key2sig(&key_file),
         Commands::Verify => cmd_verify(),
         Commands::Check {
             serial,
-            disk_gb,
+            disk_size,
+            unit,
             model,
             keys,
-        } => cmd_check(&serial, disk_gb, model, keys),
+        } => cmd_check(&serial, disk_size, unit, model, keys),
     }
 }
 
@@ -247,15 +322,18 @@ fn main() {
 
 /// Execute the collision search
 fn cmd_search(
-    disk_gb: u32,
+    disk_size: u64,
+    unit: SizeUnit,
     threads: Option<usize>,
     model: Option<String>,
     keys: Option<String>,
     count: usize,
     from: u64,
 ) {
-    let sector_val = disk_gb_to_sector_val(disk_gb);
-    let model = model.unwrap_or_else(|| format!("ROS{}G", disk_gb));
+    validate_disk_size(disk_size, unit);
+    let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
+    let sector_val = disk_bytes_to_sector_val(total_bytes);
+    let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
     let num_threads = threads.unwrap_or_else(|| {
         thread::available_parallelism()
             .map(|n| n.get())
@@ -267,7 +345,7 @@ fn cmd_search(
     let start_serial = from * 1_000_000;
 
     verify_6g(&raw_targets);
-    print_search_banner(disk_gb, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd);
+    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd);
 
     let ctx = Arc::new(SearchContext {
         model_bytes: build_model_bytes(&model),
@@ -308,7 +386,7 @@ fn cmd_search(
 
 /// Print search startup info
 fn print_search_banner(
-    disk_gb: u32,
+    disk_label: &str,
     model: &str,
     sector_val: u32,
     num_threads: usize,
@@ -325,7 +403,7 @@ fn print_search_banner(
     let engine = if use_simd { "AVX-512 x16" } else { "scalar" };
 
     println!("=== RouterOS L6 Serial Generator ===");
-    println!("Disk: {}G  Model: {}  SV: 0x{:X}", disk_gb, model, sector_val);
+    println!("Disk: {}  Model: {}  SV: 0x{:X}", disk_label, model, sector_val);
     println!(
         "Threads: {}  Targets: {}  Mode: {}  Engine: {}",
         num_threads,
@@ -498,9 +576,11 @@ fn cmd_key2sig(path: &str) {
 }
 
 /// Check whether a given serial matches a known signature
-fn cmd_check(serial: &str, disk_gb: u32, model: Option<String>, keys: Option<String>) {
-    let sector_val = disk_gb_to_sector_val(disk_gb);
-    let model = model.unwrap_or_else(|| format!("ROS{}G", disk_gb));
+fn cmd_check(serial: &str, disk_size: u64, unit: SizeUnit, model: Option<String>, keys: Option<String>) {
+    validate_disk_size(disk_size, unit);
+    let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
+    let sector_val = disk_bytes_to_sector_val(total_bytes);
+    let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
     let (mix_lo, mix_hi) = targets::mbr_mix();
     let search_targets = targets::load_targets(keys.as_deref());
 
@@ -515,7 +595,7 @@ fn cmd_check(serial: &str, disk_gb: u32, model: Option<String>, keys: Option<Str
     println!("=== Check ===");
     println!("Serial: {}", serial_display);
     println!("Model:  {}", model);
-    println!("Disk:   {}G (SV: 0x{:X})", disk_gb, sector_val);
+    println!("Disk:   {} (SV: 0x{:X})", size_label, sector_val);
     println!("SOFTWARE ID: {}", sid);
 
     let matched = search_targets.iter().find(|t| sid_hi == t.need_hi && sid_lo == t.need_lo);
@@ -596,6 +676,86 @@ fn verify_6g(targets: &[targets::Target]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- SizeUnit::min_magnitude ----
+
+    #[test]
+    fn test_min_magnitude_gb_is_1() {
+        assert_eq!(SizeUnit::G.min_magnitude(), 1);
+    }
+
+    #[test]
+    fn test_min_magnitude_mb_is_64() {
+        assert_eq!(SizeUnit::M.min_magnitude(), 64);
+    }
+
+    #[test]
+    fn test_min_magnitude_bytes_is_64mb_in_bytes() {
+        assert_eq!(SizeUnit::B.min_magnitude(), 64 * 1024 * 1024);
+    }
+
+    // ---- disk_size_bytes_and_label ----
+
+    #[test]
+    fn test_disk_size_gb() {
+        let (bytes, label) = disk_size_bytes_and_label(100, SizeUnit::G);
+        assert_eq!(bytes, 100 * 1024 * 1024 * 1024);
+        assert_eq!(label, "100G");
+    }
+
+    #[test]
+    fn test_disk_size_mb_128() {
+        let (bytes, label) = disk_size_bytes_and_label(128, SizeUnit::M);
+        assert_eq!(bytes, 128 * 1024 * 1024);
+        assert_eq!(label, "128M");
+    }
+
+    #[test]
+    fn test_disk_size_mb_256_512() {
+        assert_eq!(disk_size_bytes_and_label(256, SizeUnit::M).0, 256 * 1024 * 1024);
+        assert_eq!(disk_size_bytes_and_label(512, SizeUnit::M).0, 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_disk_size_mb_vs_gb_distinct() {
+        let (mb_bytes, _) = disk_size_bytes_and_label(1, SizeUnit::M);
+        let (gb_bytes, _) = disk_size_bytes_and_label(1, SizeUnit::G);
+        assert_eq!(gb_bytes, mb_bytes * 1024);
+    }
+
+    #[test]
+    fn test_disk_size_bytes_unit_passthrough() {
+        // For SizeUnit::B, magnitude IS the byte count (bytes_per_unit == 1)
+        let (bytes, label) = disk_size_bytes_and_label(67_108_864, SizeUnit::B);
+        assert_eq!(bytes, 67_108_864);
+        assert_eq!(label, "67108864B");
+    }
+
+    #[test]
+    fn test_disk_size_bytes_matches_equivalent_mb() {
+        let (bytes_via_b, _) = disk_size_bytes_and_label(134_217_728, SizeUnit::B);
+        let (bytes_via_m, _) = disk_size_bytes_and_label(128, SizeUnit::M);
+        assert_eq!(bytes_via_b, bytes_via_m);
+    }
+
+    #[test]
+    fn test_disk_size_kb() {
+        let (bytes, label) = disk_size_bytes_and_label(65_536, SizeUnit::K);
+        assert_eq!(bytes, 65_536 * 1024);
+        assert_eq!(label, "65536K");
+    }
+
+    #[test]
+    fn test_disk_size_kb_matches_equivalent_mb() {
+        let (bytes_via_k, _) = disk_size_bytes_and_label(131_072, SizeUnit::K);
+        let (bytes_via_m, _) = disk_size_bytes_and_label(128, SizeUnit::M);
+        assert_eq!(bytes_via_k, bytes_via_m);
+    }
+
+    #[test]
+    fn test_min_magnitude_kb_is_64mb_in_kb() {
+        assert_eq!(SizeUnit::K.min_magnitude(), 64 * 1024);
+    }
 
     // ---- write_serial ----
 

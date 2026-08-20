@@ -10,7 +10,7 @@ Machine-executable rules for all AI tools working on this Rust project.
 
 ```
 src/
-├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + 31 tests
+├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + 41 tests
 ├── sha256_constants.rs  Shared constants (ROUND_CONSTANTS + INITIAL_HASH_VALUES)
 ├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
 ├── sha256_scalar.rs     Scalar SHA-256 backup (#[cfg(test)], for cross-validation)
@@ -26,16 +26,17 @@ keys.toml                External key configuration (loaded at runtime, no recom
 
 ```bash
 # Search for collisions
-ros-serialgen search -s <GB> -t <threads> [-c <count>] [-f <from_M>] [-m <model>] [-k <keys.toml>]
-  -s  Disk size (GB)
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>] [-m <model>] [-k <keys.toml>]
+  -s  Disk size magnitude, paired with -u
+  -u  Unit: g (gigabytes, default), m (megabytes), k (kilobytes), b (bytes) -- min size is 64M in any unit
   -t  Thread count
   -c  Collision count (default 1, 0 = unlimited collection)
   -f  Resume from N million hashes (matches the M value in progress output)
-  -m  Custom Model (default ROS<GB>G)
+  -m  Custom Model (default ROS<N><unit>, e.g. ROS100G, ROS128M)
   -k  Specify keys.toml path
 
 # Verify a serial
-ros-serialgen check --serial <20-digit> -s <GB> [-m <model>] [-k <keys.toml>]
+ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>]
 
 # Conversion
 ros-serialgen sig2key <128-char-hex>     # signature → Key text
@@ -49,7 +50,7 @@ ros-serialgen verify
 
 ```bash
 RUSTFLAGS='-C target-cpu=native' cargo build --release   # AVX-512 optimal
-cargo test          # 31 unit tests
+cargo test          # 49 unit tests
 cargo clippy        # zero warnings
 cargo fmt --check   # format check
 ```
@@ -61,7 +62,7 @@ cargo fmt --check   # format check
 - All public functions must have `///` doc comments
 - SHA-256 implementations must annotate the reason for byte-order conversions
 - New collision targets go into keys.toml configuration, never hardcoded in source
-- 4 built-in default targets serve as fallback (when keys.toml is absent)
+- No built-in default targets -- `load_targets` exits with an error if keys.toml is missing or empty
 - Search results must self-verify (recompute the full SOFTWARE ID and print it)
 - `decode()` returns `Result`, errors on invalid characters
 - Production code must not use `assert!` (use `eprintln!` + `process::exit` instead)
@@ -94,8 +95,8 @@ Base-35 table: "TN0BYX18S5HZ4IA67DGF3LPCJQRUK9MW2VE"
 - `software_id::tests::test_encode_decode_roundtrip` — encode/decode roundtrip
 - `software_id::tests::test_decode_invalid_char` — invalid character error
 - `software_id::tests::test_round_sectors` — 5 rounding verification cases
-- `convert::tests::test_roundtrip_8g` — sig ↔ key conversion verification
-- `main::tests` — 24 tests covering write_serial, BCD, software_id, model, input_buf, check_match, E2E
+- `convert::tests::test_roundtrip_synthetic` — sig ↔ key conversion verification
+- `main::tests` — 41 tests covering disk size parsing/validation, write_serial, BCD, software_id, model, input_buf, check_match, E2E
 
 ## Dependencies
 
