@@ -13,7 +13,7 @@ For a streamlined walkthrough, see [quick-start.md](quick-start.md).
 - A collision entry for your disk size from the [collision table](collision-database.md)
 - SSH access to the PVE host
 
-> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first. For a flag-by-flag explanation of every command, see [command-reference.md](command-reference.md).
+> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first.
 
 ---
 

@@ -51,9 +51,28 @@ cargo test
 
 ---
 
-## PVE Operations
+## PVE Operation Reference
 
-For a flag-by-flag explanation of every `qm`, `qemu-img`, `qemu-nbd`, `dd`, and `hexdump` command used in this project, see [command-reference.md](command-reference.md).
+### VM Lifecycle
+
+| Command | Purpose |
+|---|---|
+| `qm create <VMID> ...` | Create VM |
+| `qm set <VMID> --ide0 ...` | Attach disk with serial/model |
+| `qm set <VMID> --delete <device>` | Remove disk or CD-ROM |
+| `qm config <VMID>` | View VM configuration |
+| `qm start/stop/destroy <VMID>` | VM lifecycle control |
+
+### Disk Operations
+
+| Command | Purpose |
+|---|---|
+| `qemu-img create -f qcow2 <path> <bytes>` | Create exact-size qcow2 disk |
+| `modprobe nbd max_part=8` | Load NBD kernel module |
+| `qemu-nbd --connect=/dev/nbd0 <qcow2>` | Mount qcow2 as block device |
+| `dd of=/dev/nbd0 bs=1 seek=256 count=80` | Write 80-byte MBR license data |
+| `hexdump -C -s 0x100 -n 80 /dev/nbd0` | Verify MBR license region |
+| `qemu-nbd --disconnect /dev/nbd0` | Disconnect block device |
 
 ---
 

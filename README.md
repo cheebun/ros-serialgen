@@ -133,7 +133,7 @@ cargo fmt --check   # format check
 
 - [Quick Start](docs/quick-start.md) — deploy a licensed VM in 10 minutes
 - [Deployment Guide](docs/deployment-guide.md) — complete PVE setup reference
-- [Command Reference](docs/command-reference.md) — every command and flag explained
+- [Command Reference](docs/command-reference.md) — every ros-serialgen subcommand and flag explained
 - [Collision Database](docs/collision-database.md) — verified serial/model combinations
 - [Architecture](docs/architecture.md) — algorithm and security analysis
 - [License Internals](docs/license-internals.md) — SOFTWARE ID / MBR deep dive

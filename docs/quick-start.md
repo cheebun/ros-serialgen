@@ -10,7 +10,7 @@ Deploy a licensed RouterOS L6 virtual machine on Proxmox VE using a pre-computed
 - RouterOS x86 ISO uploaded to PVE storage ([download](https://mikrotik.com/download))
 - `ros-serialgen` binary built (`cargo build --release`)
 
-> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first. For a flag-by-flag explanation of every command, see [command-reference.md](command-reference.md).
+> **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first.
 
 ---
 
@@ -33,7 +33,7 @@ Pick your disk size from the table below. For sizes not listed, see the [full co
 
 All entries above use space-free model names, so no `%20` encoding is needed.
 
-For unlisted sizes, search for a new collision:
+For unlisted sizes, search for a new collision (see [command-reference.md](command-reference.md) for what each flag does):
 
 ```bash
 ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml
