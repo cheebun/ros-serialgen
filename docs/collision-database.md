@@ -72,6 +72,7 @@ ros-serialgen search -s <GB> -t <threads> -c 0 -k keys.toml
 | Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
 |---|---|---|---|---|
 | 1,073,741,824 | `SSD1G` | `00000000251582663387` | TI09-7WK3 | Y |
+| 1,073,741,824 | `SSD1G` | `00000000394825144904` | TI09-7WK3 | Y |
 
 ### 6G
 
