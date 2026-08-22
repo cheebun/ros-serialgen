@@ -10,7 +10,7 @@ Machine-executable rules for all AI tools working on this Rust project.
 
 ```
 src/
-├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + 41 tests
+├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + 43 tests
 ├── sha256_constants.rs  Shared constants (ROUND_CONSTANTS + INITIAL_HASH_VALUES)
 ├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
 ├── sha256_scalar.rs     Scalar SHA-256 backup (#[cfg(test)], for cross-validation)
@@ -26,7 +26,7 @@ keys.toml                External key configuration (loaded at runtime, no recom
 
 ```bash
 # Search for collisions
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>] [-m <model>] [-k <keys.toml>]
+ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>] [-m <model>] [-k <keys.toml>] [-i <identity_hex>]
   -s  Disk size magnitude, paired with -u
   -u  Unit: g (gigabytes, default), m (megabytes), k (kilobytes), b (bytes) -- min size is 64M in any unit
   -t  Thread count
@@ -34,9 +34,10 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>]
   -f  Resume from N million hashes (matches the M value in progress output)
   -m  Custom Model (default ROS<N><unit>, e.g. ROS100G, ROS128M)
   -k  Specify keys.toml path
+  -i  Non-standard 20-hex-char MBR identity (0x100-0x109); default is the standard all-zero identity
 
 # Verify a serial
-ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>]
+ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>] [-i <identity_hex>]
 
 # Conversion
 ros-serialgen sig2key <128-char-hex>     # signature → Key text
@@ -50,7 +51,7 @@ ros-serialgen verify
 
 ```bash
 RUSTFLAGS='-C target-cpu=native' cargo build --release   # AVX-512 optimal
-cargo test          # 49 unit tests
+cargo test          # 58 unit tests
 cargo clippy        # zero warnings
 cargo fmt --check   # format check
 ```
@@ -96,7 +97,8 @@ Base-35 table: "TN0BYX18S5HZ4IA67DGF3LPCJQRUK9MW2VE"
 - `software_id::tests::test_decode_invalid_char` — invalid character error
 - `software_id::tests::test_round_sectors` — 5 rounding verification cases
 - `convert::tests::test_roundtrip_synthetic` — sig ↔ key conversion verification
-- `main::tests` — 41 tests covering disk size parsing/validation, write_serial, BCD, software_id, model, input_buf, check_match, E2E
+- `main::tests` — 43 tests covering disk size parsing/validation, write_serial, BCD, software_id, model, input_buf, check_match, E2E, identity parsing/mix resolution
+- `targets::tests` — 3 tests covering `mix_from_identity` (matches standard for all-zero, deterministic, differs for non-zero)
 
 ## Dependencies
 

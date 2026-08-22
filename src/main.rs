@@ -69,6 +69,10 @@ enum Commands {
         /// Start from N million hashes (resume from progress output)
         #[arg(short = 'f', long, default_value = "0")]
         from: u64,
+        /// Non-standard 20-hex-char MBR identity seed (0x100-0x109), e.g. from a real
+        /// device's captured MBR. Default: standard all-zero identity used by collision search.
+        #[arg(short = 'i', long)]
+        identity: Option<String>,
     },
     /// Convert signature_hex to Key text
     Sig2key {
@@ -99,6 +103,10 @@ enum Commands {
         /// keys.toml path
         #[arg(short, long)]
         keys: Option<String>,
+        /// Non-standard 20-hex-char MBR identity seed (0x100-0x109), e.g. from a real
+        /// device's captured MBR. Default: standard all-zero identity used by collision search.
+        #[arg(short = 'i', long)]
+        identity: Option<String>,
     },
 }
 
@@ -168,6 +176,33 @@ fn disk_size_bytes_and_label(magnitude: u64, unit: SizeUnit) -> (u64, String) {
     let bytes = magnitude * unit.bytes_per_unit();
     let label = format!("{}{}", magnitude, unit.label_char());
     (bytes, label)
+}
+
+/// Parse a 20-hex-char `--identity` argument into the 10-byte MBR identity seed.
+/// Exits the process on malformed input (wrong length or non-hex characters).
+fn parse_identity_hex(s: &str) -> [u8; 10] {
+    if s.len() != 20 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        eprintln!(
+            "Error: --identity must be exactly 20 hex characters (10 bytes), got '{}' ({} chars)",
+            s,
+            s.len()
+        );
+        std::process::exit(1);
+    }
+    let mut out = [0u8; 10];
+    for i in 0..10 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    out
+}
+
+/// Resolve the mix to use: either derived from a custom `--identity`, or the standard
+/// all-zero-identity mix used by collision search.
+fn resolve_mix(identity: Option<&str>) -> (u32, u32) {
+    match identity {
+        Some(hex) => targets::mix_from_identity(&parse_identity_hex(hex)),
+        None => targets::mbr_mix(),
+    }
 }
 
 // ---- Search context ----
@@ -304,7 +339,8 @@ fn main() {
             keys,
             count,
             from,
-        } => cmd_search(disk_size, unit, threads, model, keys, count, from),
+            identity,
+        } => cmd_search(disk_size, unit, threads, model, keys, count, from, identity),
         Commands::Sig2key { signature_hex } => cmd_sig2key(&signature_hex),
         Commands::Key2sig { key_file } => cmd_key2sig(&key_file),
         Commands::Verify => cmd_verify(),
@@ -314,7 +350,8 @@ fn main() {
             unit,
             model,
             keys,
-        } => cmd_check(&serial, disk_size, unit, model, keys),
+            identity,
+        } => cmd_check(&serial, disk_size, unit, model, keys, identity),
     }
 }
 
@@ -329,6 +366,7 @@ fn cmd_search(
     keys: Option<String>,
     count: usize,
     from: u64,
+    identity: Option<String>,
 ) {
     validate_disk_size(disk_size, unit);
     let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
@@ -340,12 +378,12 @@ fn cmd_search(
             .unwrap_or(4)
     });
     let raw_targets = targets::load_targets(keys.as_deref());
-    let (mix_lo, mix_hi) = targets::mbr_mix();
+    let (mix_lo, mix_hi) = resolve_mix(identity.as_deref());
     let use_simd = sha256_simd::is_avx512_supported();
     let start_serial = from * 1_000_000;
 
     verify_6g(&raw_targets);
-    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd);
+    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd, identity.as_deref());
 
     let ctx = Arc::new(SearchContext {
         model_bytes: build_model_bytes(&model),
@@ -394,6 +432,7 @@ fn print_search_banner(
     count: usize,
     start_serial: u64,
     use_simd: bool,
+    identity: Option<&str>,
 ) {
     let mode_str = if count == 0 {
         "unlimited".to_string()
@@ -404,6 +443,10 @@ fn print_search_banner(
 
     println!("=== RouterOS L6 Serial Generator ===");
     println!("Disk: {}  Model: {}  SV: 0x{:X}", disk_label, model, sector_val);
+    match identity {
+        Some(hex) => println!("Identity: {} (custom, non-standard mix)", hex.to_uppercase()),
+        None => println!("Identity: 00000000000000000000 (standard, all-zero mix)"),
+    }
     println!(
         "Threads: {}  Targets: {}  Mode: {}  Engine: {}",
         num_threads,
@@ -576,12 +619,19 @@ fn cmd_key2sig(path: &str) {
 }
 
 /// Check whether a given serial matches a known signature
-fn cmd_check(serial: &str, disk_size: u64, unit: SizeUnit, model: Option<String>, keys: Option<String>) {
+fn cmd_check(
+    serial: &str,
+    disk_size: u64,
+    unit: SizeUnit,
+    model: Option<String>,
+    keys: Option<String>,
+    identity: Option<String>,
+) {
     validate_disk_size(disk_size, unit);
     let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
     let sector_val = disk_bytes_to_sector_val(total_bytes);
     let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
-    let (mix_lo, mix_hi) = targets::mbr_mix();
+    let (mix_lo, mix_hi) = resolve_mix(identity.as_deref());
     let search_targets = targets::load_targets(keys.as_deref());
 
     let serial_bytes = build_serial_bytes(serial);
@@ -592,10 +642,16 @@ fn cmd_check(serial: &str, disk_size: u64, unit: SizeUnit, model: Option<String>
     let (sid_lo, sid_hi) = sha256::hash_40(&buf);
     let sid = compute_software_id(sid_lo, sid_hi, mix_lo, mix_hi);
 
+    let identity_hex = identity
+        .as_deref()
+        .map(|s| s.to_uppercase())
+        .unwrap_or_else(|| "00000000000000000000".to_string());
+
     println!("=== Check ===");
     println!("Serial: {}", serial_display);
     println!("Model:  {}", model);
     println!("Disk:   {} (SV: 0x{:X})", size_label, sector_val);
+    println!("Identity: {}{}", identity_hex, if identity.is_some() { " (custom)" } else { " (standard)" });
     println!("SOFTWARE ID: {}", sid);
 
     let matched = search_targets.iter().find(|t| sid_hi == t.need_hi && sid_lo == t.need_lo);
@@ -616,9 +672,14 @@ fn cmd_check(serial: &str, disk_size: u64, unit: SizeUnit, model: Option<String>
         }
 
         println!(
-            "\n   MBR HEX:\n   00000000000000000000BDE800000000{}",
-            t.signature_hex
+            "\n   MBR HEX:\n   {}BDE800000000{}",
+            identity_hex, t.signature_hex
         );
+        if identity.is_some() {
+            println!("   NOTE: marker/reserved shown above (BDE800000000) are the standard values.");
+            println!("         If this identity came from a real device, use that device's own");
+            println!("         marker/reserved bytes instead -- see docs/license-internals.md §3.6.");
+        }
     } else {
         println!("\n❌ No match found");
         println!("   sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
@@ -909,6 +970,34 @@ mod tests {
         let bytes = build_serial_bytes("HYSSD-20160419B7902");
         assert_eq!(&bytes[..19], b"HYSSD-20160419B7902");
         assert_eq!(bytes[19], SPACE_PADDING);
+    }
+
+    // ---- parse_identity_hex / resolve_mix ----
+
+    #[test]
+    fn test_parse_identity_hex_exact_20() {
+        let bytes = parse_identity_hex("0011223344556677AABB");
+        assert_eq!(bytes, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_parse_identity_hex_lowercase() {
+        let bytes = parse_identity_hex("0011223344556677aabb");
+        assert_eq!(bytes, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn test_resolve_mix_none_matches_standard() {
+        assert_eq!(resolve_mix(None), targets::mbr_mix());
+    }
+
+    #[test]
+    fn test_resolve_mix_custom_matches_targets_fn() {
+        let hex = "0011223344556677AABB";
+        assert_eq!(
+            resolve_mix(Some(hex)),
+            targets::mix_from_identity(&parse_identity_hex(hex))
+        );
     }
 
     // ---- is_valid_serial / is_valid_model ----

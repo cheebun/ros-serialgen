@@ -204,6 +204,47 @@ A related debug format string found in the binary confirms the same field widths
 
 **Empirically confirmed on a real VM**: PVE VM running the ER1G-WVEL MBR (2G, `serial=00000000000000000001`) was booted twice -- once with `model=VMware Virtual IDE Hard Drive` (29 chars) and once with `model=VMware Virtual I` (the 16-char truncation) -- both produced an identical `/system license print` result. This matches the disassembly's prediction exactly: bytes past the 16th are read from the disk's IDENTIFY response but never copied into keyman's hash input buffer, so they cannot affect the SOFTWARE ID.
 
+### 3.6 marker and reserved: generated from identity, not just checked
+
+Sections 3.1-3.5 establish that `mbr_val` (used in the SOFTWARE ID hash) is computed from the 10-byte identity alone (`0x100-0x109`) -- marker (`0x10A-0x10B`) and reserved (`0x10C-0x10F`) are never fed into that hash. Two real-VM tests confirmed marker/reserved still matter for validation even though they don't affect the SOFTWARE ID: taking a known-good MBR (HCC0-4FJR's real identity + real signature) and changing only marker (to `FFFF`) or only reserved (to `DEADBEEF`) both broke validation -- `/system license print` still showed the *correct* `software-id: HCC0-4FJR` (proving the hash truly doesn't use these bytes), but fell back to a 24-hour trial (`expires-in`) in both cases.
+
+The disassembly explains why. The "key import" code path (`RouterOS decodes the key text ... generates the identity region`, §4 below) contains this sequence, found by tracing callers of the `mbr_val` function from 3.5:
+
+```asm
+movl  $0x0, 0xc(%eax)      ; reserved (0x10C, 4 bytes) := 0
+calll 0x804f490            ; compute (sha_val XOR chksum) from the 10-byte identity -- same
+                            ; computation as mbr_val, but the caller has NOT yet applied &0x7FF
+movw  %ax, 0x10a(%esi)     ; write the raw *unmasked* 16-bit result directly to marker (0x10A)
+```
+
+So marker isn't an independent value or a fixed magic constant -- **it's the very same identity-derived hash used for `mbr_val`, just written out in full (16 bits) instead of masked down to 11 bits (`& 0x7FF`) for the mix.** `mbr_val = marker & 0x7FF`. reserved is unconditionally zeroed by this same code path, which is why it's `00000000` in every example seen so far.
+
+This can be verified independently of the disassembly, using only the (already public) mbr_val formula from 3.2, computing the full unmasked value and reading it back as a little-endian 16-bit word:
+
+```python
+raw_value = sha_val ^ chksum   # same as mbr_val's inputs, but skip the "& 0x7FF"
+marker    = raw_value.to_bytes(2, 'little')
+```
+
+Checked against every known real-device identity in this project:
+
+| Device | identity-derived raw value | predicted marker (LE) | actual marker | match |
+|---|---|---|---|---|
+| standard (all-zero) | `0xE8BD` | `BDE8` | `BDE8` | yes |
+| WUB2-EYCK | `0x89A3` | `A389` | `A389` | yes |
+| HHJH-UFWL | `0x7EFA` | `FA7E` | `FA7E` | yes |
+| TI09-7WK3 | `0x9864` | `6498` | `6498` | yes |
+| ZJ3M-ESHW | `0x0875` | `7508` | `7508` | yes |
+| ER1G-WVEL | `0x53D3` | `D353` | `D353` | yes |
+| HCC0-4FJR | `0x2033` | `3320` | `BDE8` | **no** |
+| 4MZF-SFTR | `0x42A4` | `A442` | `A442` | yes |
+
+7 of 8 match exactly (a full 16-bit exact match by chance has probability 1/65536 per device -- seven independent exact matches rules out coincidence). 4MZF-SFTR's row was corrected after the original recorded data (`identity=...055A`, `marker=4442`) turned out to compute a completely different SOFTWARE ID (`1EGG-HMKR`, not `4MZF-SFTR`) when boot-tested on a real VM -- a transcription error from this project's earliest phase (Experiment 1's "five parameter sets from a forum post", see `experiments.md`), not a formula exception. Brute-forcing the 2048 possible `mbr_val` values against the target SOFTWARE ID (keeping serial/model/size fixed) found the one value that works, then searching single-hex-digit edits of the recorded identity found the fix (`A` misread as `5` in one position, and separately as `4` in the recorded marker) -- confirmed on a real VM after correction.
+
+HCC0-4FJR remains the sole confirmed exception -- from this project's earliest phase as well, but (unlike 4MZF-SFTR) independently boot-verified multiple times as a real, working license with marker `BDE8`, so it isn't a transcription error. The most plausible explanation is that it was licensed by an older RouterOS/keyman version whose key-import routine derived marker differently, while the SOFTWARE ID hash itself (which every license, old or new, must still satisfy to keep working) stayed stable across versions. This isn't confirmed, just the most plausible explanation given the available evidence -- flagged here rather than asserted.
+
+Practical implication: when writing an MBR for a real-device signature (§6 below / `docs/automated-install.md`), write `marker`/`reserved` exactly as captured from that device -- `BDE800000000` is simply what the formula produces for a large share of real captures (and for the standard all-zero collision-search identity), not a fixed constant every device is guaranteed to share. One of eight known real devices in this project proves the exception.
+
 ---
 
 ## 4. Three Forms of a License

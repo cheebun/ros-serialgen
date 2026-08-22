@@ -27,7 +27,6 @@ use crate::sha256_constants::{INITIAL_HASH_VALUES, ROUND_CONSTANTS};
 /// However, RouterOS keyman reads the first 4 bytes as sid_lo in little-endian,
 /// so we convert to a big-endian byte array first, then interpret as little-endian — equivalent to a byte reversal.
 pub fn hash_40(data: &[u8; 40]) -> (u32, u8) {
-    // ---- Padding ----
     // 40 bytes + 0x80 + 21 zero bytes + 8-byte length = 64 bytes (one block)
     let mut padded = [0u8; 64];
     padded[..40].copy_from_slice(data);
@@ -36,6 +35,44 @@ pub fn hash_40(data: &[u8; 40]) -> (u32, u8) {
     padded[62] = 0x01;
     padded[63] = 0x40;
 
+    let (a, b) = compress(&padded);
+
+    // ---- Output ----
+    // SHA-256 standard output is big-endian: a's byte order is [MSB, ..., LSB]
+    // RouterOS reads the first 4 bytes little-endian → equivalent to a byte reversal
+    let a_be = a.to_be_bytes();
+    let sid_lo = u32::from_le_bytes(a_be);
+
+    // sid_hi = the most significant big-endian byte of the second u32 (b)
+    let sid_hi = b.to_be_bytes()[0];
+
+    (sid_lo, sid_hi)
+}
+
+/// Perform MikroTik custom SHA-256 on exactly 10 bytes of input (the MBR identity seed,
+/// `0x100-0x109`). Used to derive `mbr_val`/mix and the marker field -- see
+/// `docs/license-internals.md` §3.2 and §3.6.
+///
+/// Returns the first 2 bytes of the digest as a little-endian `u16` (`sha_val`), matching
+/// the same "read big-endian output as little-endian" convention as `hash_40`'s `sid_lo`.
+pub fn hash_10(data: &[u8; 10]) -> u16 {
+    // 10 bytes + 0x80 + 53 zero bytes + 8-byte length = 64 bytes (one block)
+    let mut padded = [0u8; 64];
+    padded[..10].copy_from_slice(data);
+    padded[10] = 0x80;
+    // message length = 10 × 8 = 80 bits = 0x50, written into the last byte (big-endian)
+    padded[63] = 0x50;
+
+    let (a, _b) = compress(&padded);
+    let a_be = a.to_be_bytes();
+    u16::from_le_bytes([a_be[0], a_be[1]])
+}
+
+/// Shared 64-round compression over one already-padded 64-byte block.
+///
+/// Returns `(a, b)` -- the first two working-variable words after the initial vector is
+/// added back in. Callers extract whatever subset of output bytes they need.
+fn compress(padded: &[u8; 64]) -> (u32, u32) {
     // ---- Parse into 16 big-endian u32 words (message schedule initial values) ----
     let mut w = [0u32; 64];
     for i in 0..16 {
@@ -102,20 +139,11 @@ pub fn hash_40(data: &[u8; 40]) -> (u32, u8) {
         a = t1.wrapping_add(t2);
     }
 
-    // Add the initial vector
-    a = a.wrapping_add(INITIAL_HASH_VALUES[0]);
-    b = b.wrapping_add(INITIAL_HASH_VALUES[1]);
-
-    // ---- Output ----
-    // SHA-256 standard output is big-endian: a's byte order is [MSB, ..., LSB]
-    // RouterOS reads the first 4 bytes little-endian → equivalent to a byte reversal
-    let a_be = a.to_be_bytes();
-    let sid_lo = u32::from_le_bytes(a_be);
-
-    // sid_hi = the most significant big-endian byte of the second u32 (b)
-    let sid_hi = b.to_be_bytes()[0];
-
-    (sid_lo, sid_hi)
+    // Add the initial vector back in (feedforward)
+    (
+        a.wrapping_add(INITIAL_HASH_VALUES[0]),
+        b.wrapping_add(INITIAL_HASH_VALUES[1]),
+    )
 }
 
 #[cfg(test)]
@@ -133,5 +161,17 @@ mod tests {
         let (sid_lo, sid_hi) = hash_40(&buf);
         assert_eq!(sid_lo, 0x0B49EC2E, "sid_lo mismatch");
         assert_eq!(sid_hi, 0x35, "sid_hi mismatch");
+    }
+
+    /// Verify hash_10's raw sha_val for the standard all-zero identity. Combined with
+    /// chksum=0xFFFF (all-zero words) via XOR and masked to 11 bits, this must reduce to
+    /// mbr_val=0x0BD -- the well-established standard/collision-search mix value.
+    #[test]
+    fn test_hash_10_all_zero_identity() {
+        let sha_val = hash_10(&[0u8; 10]);
+        assert_eq!(sha_val, 0x1742);
+        let chksum: u16 = 0xFFFF; // NOT(sum of 5 all-zero LE u16 words)
+        let mbr_val = ((sha_val ^ chksum) as u32) & 0x7FF;
+        assert_eq!(mbr_val, 0x0BD, "must match the known standard mbr_val");
     }
 }

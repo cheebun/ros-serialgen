@@ -22,6 +22,7 @@ ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 | `-c <N>` | `--count <N>` | Number of collisions to find before stopping. `1` (default) stops at the first hit; `0` runs until interrupted (Ctrl+C), collecting every hit. |
 | `-f <N>` | `--from <N>` | Resume the search from N million hashes in, matching the `M` value printed in progress output. Defaults to `0` (start from the beginning). |
+| `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed (`0x100-0x109`), e.g. captured from a real device. Defaults to the standard all-zero identity used by collision search if omitted. See [license-internals.md](license-internals.md#36-marker-and-reserved-generated-from-identity-not-just-checked) for what this changes and why. |
 
 ### Minimum disk size per unit
 
@@ -51,8 +52,11 @@ ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
 | `-u <unit>` | `--unit <unit>` | Unit for `-s`: `g` (gigabytes, default), `m` (megabytes), `k` (kilobytes), or `b` (raw bytes). Same minimums as `search` above. |
 | `-m <name>` | `--model <name>` | Disk model string. Defaults to `ROS<N><unit>` if omitted. |
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
+| `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed. Same meaning as `search`'s `-i` above. |
 
-Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex.
+Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex. When `-i` is given, the printed MBR hex uses that identity instead of the standard all-zero header -- but still assumes standard `BDE800000000` for marker/reserved, which is only correct if you know that's what the source device actually used (see the note above).
+
+**Known limitation**: the `keys.toml` match lookup (`✅ Matched signature: ...`) always computes its comparison targets using the *standard* mix, regardless of `-i`. With a custom identity, the printed `SOFTWARE ID` is correct, but the match check against `keys.toml` will report "No match found" even when the computed ID is a known target -- compare the printed SOFTWARE ID against [collision-database.md](collision-database.md)'s Signature Table by eye instead.
 
 ## `ros-serialgen sig2key <signature_hex>`
 

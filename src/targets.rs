@@ -49,6 +49,29 @@ pub fn mbr_mix() -> (u32, u32) {
     (MBR_MIX as u32, (MBR_MIX >> 32) as u32)
 }
 
+/// Derive the mix (lo, hi) from a real, non-standard 10-byte MBR identity seed
+/// (`0x100-0x109`), instead of assuming the standard all-zero identity.
+///
+/// Formula (see `docs/license-internals.md` §3.2, §3.6, reverse-engineered from and
+/// cross-checked against the `keyman` binary):
+/// ```text
+/// sha_val  = MikroTik_SHA256(identity)[0:2] as LE u16
+/// chksum   = NOT(sum of 5 LE u16 words of identity) & 0xFFFF
+/// mbr_val  = (sha_val XOR chksum) & 0x7FF
+/// mix      = mbr_val * 0x3FF800F
+/// ```
+pub fn mix_from_identity(identity: &[u8; 10]) -> (u32, u32) {
+    let sha_val = crate::sha256::hash_10(identity);
+    let mut sum: u16 = 0;
+    for chunk in identity.chunks_exact(2) {
+        sum = sum.wrapping_add(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    let chksum = !sum;
+    let mbr_val = ((sha_val ^ chksum) as u64) & 0x7FF;
+    let mix = mbr_val * 0x3FF800F;
+    (mix as u32, (mix >> 32) as u32)
+}
+
 // ---- Internal implementation ----
 
 struct KeyEntry {
@@ -103,6 +126,36 @@ fn load_from_file(path: &str) -> Option<Vec<KeyEntry>> {
     }
 
     Some(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mix_from_identity_matches_standard_all_zero() {
+        // The standard all-zero identity used by collision search must reduce to
+        // the same fixed mix as mbr_mix()'s hardcoded MBR_MIX constant.
+        let (lo, hi) = mix_from_identity(&[0u8; 10]);
+        let (std_lo, std_hi) = mbr_mix();
+        assert_eq!((lo, hi), (std_lo, std_hi));
+    }
+
+    #[test]
+    fn test_mix_from_identity_deterministic() {
+        let identity = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA];
+        let a = mix_from_identity(&identity);
+        let b = mix_from_identity(&identity);
+        assert_eq!(a, b, "same identity must produce same mix");
+    }
+
+    #[test]
+    fn test_mix_from_identity_differs_from_standard() {
+        // A non-zero identity should (overwhelmingly likely) produce a different mix
+        // than the standard all-zero one.
+        let identity = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA];
+        assert_ne!(mix_from_identity(&identity), mbr_mix());
+    }
 }
 
 fn entries_to_targets(entries: &[KeyEntry]) -> Vec<Target> {
