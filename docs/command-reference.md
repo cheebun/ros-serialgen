@@ -54,9 +54,7 @@ ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 | `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed. Same meaning as `search`'s `-i` above. |
 
-Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex. When `-i` is given, the printed MBR hex uses that identity instead of the standard all-zero header -- but still assumes standard `BDE800000000` for marker/reserved, which is only correct if you know that's what the source device actually used (see the note above).
-
-**Known limitation**: the `keys.toml` match lookup (`✅ Matched signature: ...`) always computes its comparison targets using the *standard* mix, regardless of `-i`. With a custom identity, the printed `SOFTWARE ID` is correct, but the match check against `keys.toml` will report "No match found" even when the computed ID is a known target -- compare the printed SOFTWARE ID against [collision-database.md](collision-database.md)'s Signature Table by eye instead.
+Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex. When `-i` is given, the printed MBR hex uses that identity instead of the standard all-zero header -- but still assumes standard `BDE800000000` for marker/reserved, which is only correct if you know that's what the source device actually used (see the note above). The `keys.toml` match lookup (`✅ Matched signature: ...`) correctly accounts for `-i`'s mix when comparing.
 
 ## `ros-serialgen sig2key <signature_hex>`
 

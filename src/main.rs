@@ -377,8 +377,8 @@ fn cmd_search(
             .map(|n| n.get())
             .unwrap_or(4)
     });
-    let raw_targets = targets::load_targets(keys.as_deref());
     let (mix_lo, mix_hi) = resolve_mix(identity.as_deref());
+    let raw_targets = targets::load_targets(keys.as_deref(), (mix_lo, mix_hi));
     let use_simd = sha256_simd::is_avx512_supported();
     let start_serial = from * 1_000_000;
 
@@ -632,7 +632,7 @@ fn cmd_check(
     let sector_val = disk_bytes_to_sector_val(total_bytes);
     let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
     let (mix_lo, mix_hi) = resolve_mix(identity.as_deref());
-    let search_targets = targets::load_targets(keys.as_deref());
+    let search_targets = targets::load_targets(keys.as_deref(), (mix_lo, mix_hi));
 
     let serial_bytes = build_serial_bytes(serial);
     let serial_display = std::str::from_utf8(&serial_bytes).unwrap_or(serial);

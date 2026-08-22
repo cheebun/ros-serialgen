@@ -28,8 +28,14 @@ pub struct Target {
 /// Fixed mix value for an all-zero MBR: mbr_val=0x0BD, mix=0x0BD × 0x3FF800F
 const MBR_MIX: u64 = 0x0BD_u64 * 0x3FF800F;
 
-/// Load targets from keys.toml; exits with error if not found or empty
-pub fn load_targets(config_path: Option<&str>) -> Vec<Target> {
+/// Load targets from keys.toml; exits with error if not found or empty.
+///
+/// `mix` must be the *same* mix (lo, hi) that the caller will use to compute candidate
+/// SOFTWARE IDs (`targets::mbr_mix()` for the standard identity, or
+/// `targets::mix_from_identity(...)` for a custom one) -- `need_lo`/`need_hi` are only
+/// meaningful relative to that specific mix. Passing a mismatched mix silently makes
+/// every match check fail (or match the wrong candidates).
+pub fn load_targets(config_path: Option<&str>, mix: (u32, u32)) -> Vec<Target> {
     let entries = config_path
         .and_then(load_from_file)
         .or_else(|| load_from_file("keys.toml"))
@@ -41,7 +47,7 @@ pub fn load_targets(config_path: Option<&str>) -> Vec<Target> {
     }
 
     eprintln!("Loaded {} keys from config", entries.len());
-    entries_to_targets(&entries)
+    entries_to_targets(&entries, mix)
 }
 
 /// Get the lo/hi components of the MBR mix
@@ -158,8 +164,8 @@ mod tests {
     }
 }
 
-fn entries_to_targets(entries: &[KeyEntry]) -> Vec<Target> {
-    let (mix_lo, mix_hi) = mbr_mix();
+fn entries_to_targets(entries: &[KeyEntry], mix: (u32, u32)) -> Vec<Target> {
+    let (mix_lo, mix_hi) = mix;
 
     entries
         .iter()
