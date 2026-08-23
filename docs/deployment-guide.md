@@ -63,6 +63,8 @@ PVE Web UI > Create VM:
 
 The disk size must match the collision table entry **exactly** (in bytes). The procedure differs by storage backend -- check which one you're using with `pvesm status`.
 
+**Attach the disk as `ide0`, never `scsi0`/`sata0`/`virtio-scsi-pci`.** This is a hard requirement, not a style preference: `keyman` only reads the real ATA IDENTIFY data (which reflects QEMU's `serial=`/`model=` verbatim) when its `HDIO_DRIVE_CMD` ioctl succeeds against an ATA/IDE-presented disk. For any disk exposed through the Linux SCSI subsystem instead (`scsi0`, `sata0`/AHCI, `virtio-scsi-pci` all present as `/dev/sd*`), that ioctl fails and `keyman` falls back to parsing `/proc/scsi/usb-storage/<bus>`'s `Serial Number:` line -- a path meant for literal USB storage that does not reliably reflect the `serial=` property you set. Confirmed on x86_64 (`scsi0`/`sata0`) and ARM64 (`virtio-scsi-pci`) alike -- see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) for the disassembly evidence. Collisions in this project's database are verified against `ide0` only.
+
 ### Backend A: Directory Storage (e.g. `local`, qcow2 files)
 
 Example uses the 6G collision (`6442450944` bytes, model `ROS6G`); substitute the byte count for your disk size from the [collision table](collision-database.md).
