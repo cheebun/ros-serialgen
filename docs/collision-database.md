@@ -8,7 +8,7 @@ For deployment instructions, see [quick-start.md](quick-start.md) or [deployment
 
 ## 1. Known SOFTWARE IDs and Signatures
 
-Five valid L6 signatures have been recovered. Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
+Eight valid L6 signatures have been recovered (plus ER1G-WVEL/L5 and VI8Q-E90F/L1, kept for reference but out of this project's L6 scope). Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
 
 ### Signature Table
 
@@ -19,6 +19,8 @@ Five valid L6 signatures have been recovered. Each signature is valid for any di
 | HHJH-UFWL | `B08F6DA0CE6D8A13357403F0146B1DD227C5DEBFBD1B8260BE38DB0016D8B0BD110B34457997C8AC956FB7551081C1CB8DA79C0E6160A8DFE79F6FC38E543905` |
 | C7CU-PGT9 | `F4E11772DEEAED8AF43668DA5EBDAD0846B694FFE9E77EFAE77E11A6049E4303B0B09DCEF8D9A647D643D1BAD4AF13B9659CCB11A06D3A9080096634E4E88B07` |
 | ZJ3M-ESHW | `E789138FE2AD5DF78DA962BD6810DF9D68C580F937F33B1CD409402CCD956EFD38825E198A1C4F7D82216CC99142BC0F8960835E6742225E2DCD6A45AA561806` |
+| WUB2-EYCK | `2D4525F4664DC956CC67DD92ACDA8EEB19D9A2AA16F744EB9DE66C5E6B44B0FA37E50CAF652E1306495B1A9DEEB0A603B6128618DB6392675B612371BEB7590F` |
+| HCC0-4FJR | `C333B3013346CB7ACB03A5809FC6899D54FABD910C0FE9C4B874624D164A1EEE61D230405FB47CC6A45175ED0158D7742E34F50D1E8F574A083AFB214CE43B07` |
 | G353-EXPG | `993D2B07CBF4A90DE4B6AFEFDEC54C03BF4BFB11DB52C232E0675A5DB3F67FB7D575950718A9AC4A6C2C1C986E9B2A1F3884AEF07805A2FDFAA6A3B1B0AC9C09` |
 | VI8Q-E90F | `FAF308BA3FFD4185308A8784244749EFFE7E4E65C14C01CD55D946506B47F636757F62106D114329104012DE7B44543F3444F0E724080873E3A20E11F5EF450E` |
 
@@ -76,7 +78,7 @@ Five valid L6 signatures have been recovered. Each signature is valid for any di
 
 **Key text:** generate on demand with `ros-serialgen sig2key <signature-hex-above>`.
 
-Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). L-level not yet confirmed.
+Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). Verified on PVE VM 314 (24G, `ROS24G`, `00000001384936780264`, standard all-zero identity): `/system license print` shows `software-id: G353-EXPG`, `nlevel: 6`, no `expires-in` -- confirmed L6, the 8th working L6 SOFTWARE ID in this project.
 
 ### VI8Q-E90F -- confirmed L1, not L6
 
