@@ -73,9 +73,10 @@ enum Commands {
         /// device's captured MBR. Default: standard all-zero identity used by collision search.
         #[arg(short = 'i', long)]
         identity: Option<String>,
-        /// Disk bus type: ide (default, verified against real hardware) or scsi
-        /// (scsi0/sata0/virtio-scsi-pci -- forces sector_val=0; see
-        /// docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only).
+        /// Disk bus type: ide (default, verified against real hardware -- also covers
+        /// sata0/AHCI, which uses the identical encoding) or scsi (scsi0/virtio-scsi-pci
+        /// specifically, NOT sata0 -- forces sector_val=0; see docs/license-internals.md
+        /// §8.11-8.20; end-to-end activation confirmed on x86_64, §8.18).
         #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
         bus: BusType,
     },
@@ -112,9 +113,10 @@ enum Commands {
         /// device's captured MBR. Default: standard all-zero identity used by collision search.
         #[arg(short = 'i', long)]
         identity: Option<String>,
-        /// Disk bus type: ide (default, verified against real hardware) or scsi
-        /// (scsi0/sata0/virtio-scsi-pci -- forces sector_val=0; see
-        /// docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only).
+        /// Disk bus type: ide (default, verified against real hardware -- also covers
+        /// sata0/AHCI, which uses the identical encoding) or scsi (scsi0/virtio-scsi-pci
+        /// specifically, NOT sata0 -- forces sector_val=0; see docs/license-internals.md
+        /// §8.11-8.20; end-to-end activation confirmed on x86_64, §8.18).
         #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
         bus: BusType,
     },
@@ -123,17 +125,19 @@ enum Commands {
 /// Disk bus type -- see `docs/license-internals.md` §8 for why this matters.
 ///
 /// `keyman` uses entirely different code paths to read serial/model depending on how the
-/// disk is presented to the guest kernel: a real ATA/IDE device (`ide0`) vs. anything routed
-/// through the SCSI subsystem (`scsi0`, `sata0`/AHCI, `virtio-scsi-pci`). This project's
-/// collision database (§1-7) is verified only against `Ide`. `Scsi` mode is derived from
-/// black-box testing on a single 1GiB ARM64 VM (§8.11-8.13) -- treat results as unconfirmed
-/// until independently verified on real hardware.
+/// disk is presented to the guest kernel. `sata0`/AHCI disks use QEMU's `ide-hd` device --
+/// the same device model as real `ide0` -- and are confirmed to use the identical encoding
+/// (§8.20), so `Ide` covers both. `Scsi` covers `scsi0`/`virtio-scsi-pci` specifically
+/// (SCSI INQUIRY + VPD page 0x80, sector_val forced to 0) -- confirmed correct and fully
+/// activatable end-to-end on x86_64 (§8.14, §8.18-8.19); on ARM64 a separate
+/// virtualization-detection issue in `keyman` can still block activation (§8.15-8.17).
 #[derive(Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 enum BusType {
-    /// Real ATA/IDE-presented disk (QEMU `ide0`). Standard, verified encoding.
+    /// Real ATA/IDE-presented disk (QEMU `ide0`), or `sata0`/AHCI (confirmed identical
+    /// encoding, §8.20). Standard, verified encoding.
     Ide,
-    /// SCSI-subsystem-presented disk (`scsi0`, `sata0`, `virtio-scsi-pci`). Forces
-    /// sector_val=0 -- see §8.11-8.13. Unconfirmed beyond one 1GiB test case.
+    /// SCSI-subsystem-presented disk (`scsi0`/`virtio-scsi-pci` -- NOT `sata0`, which uses
+    /// `Ide`'s encoding instead, §8.20). Forces sector_val=0 -- see §8.11-8.19.
     Scsi,
 }
 
@@ -488,9 +492,9 @@ fn print_search_banner(
     println!("=== RouterOS L6 Serial Generator ===");
     println!("Disk: {}  Model: {}  SV: 0x{:X}", disk_label, model, sector_val);
     match bus {
-        BusType::Ide => println!("Bus: ide (verified against real hardware)"),
+        BusType::Ide => println!("Bus: ide (verified against real hardware; also covers sata0/AHCI)"),
         BusType::Scsi => {
-            println!("Bus: scsi (scsi0/sata0/virtio-scsi-pci; sector_val forced to 0)");
+            println!("Bus: scsi (scsi0/virtio-scsi-pci only, NOT sata0; sector_val forced to 0)");
             println!("  WARNING: this encoding is validated against 7 real boot tests on a single");
             println!("  1GiB ARM64 VM only (docs/license-internals.md §8.11-8.13). sector_val=0 has");
             println!("  not been confirmed at other disk sizes -- verify any hit on real hardware");
@@ -659,16 +663,36 @@ fn cmd_sig2key(hex: &str) {
         Ok(key) => println!("{}", key),
         Err(e) => eprintln!("Error: {}", e),
     }
+    print_metadata(hex);
 }
 
 /// Convert a License Key file to signature hex
 fn cmd_key2sig(path: &str) {
     match std::fs::read_to_string(path) {
         Ok(content) => match convert::key_text_to_signature(&content) {
-            Ok(sig) => println!("{}", sig),
+            Ok(sig) => {
+                println!("{}", sig);
+                print_metadata(&sig);
+            }
             Err(e) => eprintln!("Error: {}", e),
         },
         Err(e) => eprintln!("Cannot read {}: {}", path, e),
+    }
+}
+
+/// Print a signature's embedded SOFTWARE ID/version/level to stderr, so it doesn't pollute
+/// stdout for callers piping key text or signature hex directly to a file.
+fn print_metadata(signature_hex: &str) {
+    match convert::decode_metadata(signature_hex) {
+        Ok(m) => {
+            eprintln!("SOFTWARE-ID: {}", m.software_id);
+            eprintln!("VERSION:     {} (unconfirmed field, see docs/license-internals.md)", m.version_byte);
+            eprintln!("LEVEL:       {}", m.level);
+            if !m.padding_ok {
+                eprintln!("Warning: reserved bytes not all zero -- this may not be a valid signature");
+            }
+        }
+        Err(e) => eprintln!("(could not decode SOFTWARE-ID/level metadata: {})", e),
     }
 }
 
@@ -707,8 +731,8 @@ fn cmd_check(
     println!("Model:  {}", model);
     println!("Disk:   {} (SV: 0x{:X})", size_label, sector_val);
     match bus {
-        BusType::Ide => println!("Bus:    ide (verified against real hardware)"),
-        BusType::Scsi => println!("Bus:    scsi (sector_val forced to 0 -- see docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only)"),
+        BusType::Ide => println!("Bus:    ide (verified against real hardware; also covers sata0/AHCI)"),
+        BusType::Scsi => println!("Bus:    scsi (scsi0/virtio-scsi-pci only, NOT sata0; sector_val forced to 0 -- see docs/license-internals.md §8.11-8.20)"),
     }
     println!("Identity: {}{}", identity_hex, if identity.is_some() { " (custom)" } else { " (standard)" });
     println!("SOFTWARE ID: {}", sid);

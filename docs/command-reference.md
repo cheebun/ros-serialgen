@@ -23,7 +23,7 @@ ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
 | `-c <N>` | `--count <N>` | Number of collisions to find before stopping. `1` (default) stops at the first hit; `0` runs until interrupted (Ctrl+C), collecting every hit. |
 | `-f <N>` | `--from <N>` | Resume the search from N million hashes in, matching the `M` value printed in progress output. Defaults to `0` (start from the beginning). |
 | `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed (`0x100-0x109`), e.g. captured from a real device. Defaults to the standard all-zero identity used by collision search if omitted. See [license-internals.md](license-internals.md#36-marker-and-reserved-generated-from-identity-not-just-checked) for what this changes and why. |
-| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default, verified against real hardware) or `scsi` (`scsi0`/`sata0`/`virtio-scsi-pci` -- forces `sector_val=0`). See [license-internals.md §8.11-8.14](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) -- the SOFTWARE ID computation is confirmed correct in `scsi` mode, but writing a matching MBR does **not** currently result in an activatable license on `scsi`/`sata` bus types (§8.14, unresolved). |
+| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default, verified against real hardware -- covers both `ide0` and `sata0`/AHCI, which use the identical encoding, §8.20) or `scsi` (`scsi0`/`virtio-scsi-pci` specifically -- forces `sector_val=0`; does **not** apply to `sata0`). See [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) -- `scsi` mode's SOFTWARE ID computation and full end-to-end activation are both confirmed on x86_64 (§8.14, §8.18); on ARM64 a separate virtualization-detection issue can still prevent activation (§8.15-8.17). |
 
 ### Minimum disk size per unit
 
@@ -60,11 +60,13 @@ Prints the computed SOFTWARE ID, and if it matches a known signature, the Licens
 
 ## `ros-serialgen sig2key <signature_hex>`
 
-Positional argument: a 128-character hex string (64 bytes) -- the signature from the [Signature Table](collision-database.md#signature-table). Outputs the corresponding `-----BEGIN MIKROTIK SOFTWARE KEY-----...` block.
+Positional argument: a 128-character hex string (64 bytes) -- the signature from the [Signature Table](collision-database.md#signature-table). Prints the corresponding `-----BEGIN MIKROTIK SOFTWARE KEY-----...` block to stdout.
+
+Also prints `SOFTWARE-ID`/`VERSION`/`LEVEL` to **stderr** (so stdout stays exactly the key text, safe to redirect or copy/paste as-is) -- decrypted from the signature's first 16 bytes, confirming what SOFTWARE ID and license level this signature actually corresponds to. See [license-internals.md §8.21](license-internals.md#821-signature-metadata-decryption-mt_transform) for how this works.
 
 ## `ros-serialgen key2sig <key_file>`
 
-Positional argument: path to a `.key` file containing MikroTik key text. Outputs the 128-character signature hex.
+Positional argument: path to a `.key` file containing MikroTik key text. Prints the 128-character signature hex to stdout, and the same `SOFTWARE-ID`/`VERSION`/`LEVEL` metadata to stderr as `sig2key` above.
 
 ## `ros-serialgen verify`
 

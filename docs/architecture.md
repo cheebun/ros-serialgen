@@ -31,14 +31,14 @@ A multi-threaded brute-force searcher was built (initially in C, then rewritten 
 
 MTBase64 encode/decode was obtained from the MTLic project. Key text was found to be `MTBase64Encode(MBR[0x110:0x150])`. All four key texts were recovered, enabling both MBR write and key import activation methods.
 
-### Phase 6: Bus-Type Dependence (`ide0` vs `scsi0`/`sata0`)
+### Phase 6: Bus-Type Dependence (`ide0`/`sata0` vs `scsi0`)
 
-All of Phases 1-5 were verified exclusively against `ide0`-attached disks. Applying a verified `serial=`/`model=` combo to a `scsi0`/`sata0`/`virtio-scsi-pci` disk produces a **different** SOFTWARE ID for the identical parameters. Reverse-engineering both the ARM32 (`nova/bin/keyman` from a RouterOS ARM64 image) and x86 (`keyman_7.23.2`) binaries traced this to `keyman` using an entirely different hardware-identification code path depending on how the disk is presented to the guest kernel:
+All of Phases 1-5 were verified exclusively against `ide0`-attached disks. Applying a verified `serial=`/`model=` combo to a `scsi0`/`virtio-scsi-pci` disk produces a **different** SOFTWARE ID for the identical parameters. Reverse-engineering both the ARM32 (`nova/bin/keyman` from a RouterOS ARM64 image) and x86 (`keyman_7.23.2`) binaries traced this to `keyman` using an entirely different hardware-identification code path depending on how the disk is presented to the guest kernel:
 
-- `ide0`: `ioctl(HDIO_DRIVE_CMD)` succeeds -> real ATA IDENTIFY data is used (Phases 1-5's basis)
-- `scsi0`/`sata0`/`virtio-scsi-pci`: that ioctl fails, falling through to `ioctl(SG_IO)` -- standard SCSI INQUIRY (model) + EVPD page 0x80 Unit Serial Number (serial) -- and, critically, `sector_val` is **always `0`** on this path regardless of the disk's actual size (empirically confirmed at both 1GiB and 2GiB)
+- `ide0` and `sata0`/AHCI: both are backed by QEMU's `ide-hd` device model (`sata0` is just `ide-hd` on an AHCI controller instead of legacy PIIX/ISA IDE) -- `ioctl(HDIO_DRIVE_CMD)` succeeds -> real ATA IDENTIFY data is used (Phases 1-5's basis). Confirmed identical encoding for both via exact `-b ide` SOFTWARE ID match and empirical activation of an existing `ide0` collision-database entry on a fresh `sata0` install (§8.20).
+- `scsi0`/`virtio-scsi-pci`: backed by QEMU's `scsi-hd` device instead, so that ioctl fails, falling through to `ioctl(SG_IO)` -- standard SCSI INQUIRY (model) + EVPD page 0x80 Unit Serial Number (serial) -- and, critically, `sector_val` is **always `0`** on this path regardless of the disk's actual size (empirically confirmed at both 1GiB and 2GiB)
 
-`ros-serialgen search`/`check` gained a `-b`/`--bus <ide|scsi>` flag for this. `scsi0` activation was confirmed to work end-to-end on x86_64 (fresh install, standard PVE-default SMBIOS, single boot -> `nlevel: 6`). On ARM64 specifically, a separate QEMU/KVM-virtualization-detection code path in `keyman` (triggered by the guest's `board` environment variable) can additionally interfere with license *signature* validation even when the SOFTWARE ID itself is computed correctly -- this remains only partially understood. Full details, including the disassembly evidence, are in [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation).
+`ros-serialgen search`/`check` gained a `-b`/`--bus <ide|scsi>` flag for this -- `ide` covers both `ide0` and `sata0`/AHCI, `scsi` covers `scsi0`/`virtio-scsi-pci` only. `scsi0` activation was confirmed to work end-to-end on x86_64 (fresh install, standard PVE-default SMBIOS, single boot -> `nlevel: 6`). On ARM64 specifically, a separate QEMU/KVM-virtualization-detection code path in `keyman` (triggered by the guest's `board` environment variable) can additionally interfere with license *signature* validation even when the SOFTWARE ID itself is computed correctly -- this remains only partially understood. Full details, including the disassembly evidence, are in [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation).
 
 ---
 
@@ -47,11 +47,11 @@ All of Phases 1-5 were verified exclusively against `ide0`-attached disks. Apply
 ### SOFTWARE ID Computation
 
 ```
-Inputs (ide0 -- see Phase 6 / license-internals.md §8 for scsi0's different sourcing):
+Inputs (ide0/sata0 -- see Phase 6 / license-internals.md §8 for scsi0's different sourcing):
   serial     = 20 bytes (disk serial number, from ATA IDENTIFY or QEMU serial=)
   model      = 16 bytes (disk model name, truncated or space-padded to 16)
   sector_val = 4 bytes  (total_sectors >> 11, rounded to 4-bit boundary;
-                         always 0 on scsi0/sata0/virtio-scsi-pci, regardless of disk size)
+                         always 0 on scsi0/virtio-scsi-pci, regardless of disk size)
 
 Steps:
   1. buf[40] = serial[20] || model[16] || LE32(sector_val)

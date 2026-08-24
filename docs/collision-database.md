@@ -10,6 +10,8 @@ For deployment instructions, see [quick-start.md](quick-start.md) or [deployment
 
 Ten valid signatures have been recovered. Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
 
+**Bus type:** every entry in this database (§1-2) was collision-searched and verified against `ide0`-attached disks, and applies **directly and unmodified to `sata0`/AHCI disks of the same size** -- `sata0` uses the identical encoding as `ide0` (both are QEMU's `ide-hd` device model), confirmed algorithmically and by re-verifying `TI09-7WK3` (`serial=00000000251582663387`, `model=SSD1G`, 1GiB) fresh on a `sata0` disk: `/system license print` -> `software-id: TI09-7WK3`, `nlevel: 6`. See [license-internals.md §8.20](license-internals.md#820-sata0-is-not-like-scsi0----it-uses-the-exact-same-encoding-as-ide0) for the full writeup. This does **not** extend to `scsi0`/`virtio-scsi-pci`, which uses a different encoding (`sector_val` forced to `0`) -- see §3 below.
+
 ### Signature Table
 
 | SOFTWARE ID | Signature hex (64 bytes) |
