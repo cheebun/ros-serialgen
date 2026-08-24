@@ -513,3 +513,72 @@ The one open question from 8.6-8.9 -- whether the SCSI fallback path's `Serial N
 Changing only `serial=` deterministically changes the SOFTWARE ID, and reverting it reproduces the original result exactly. **`serial=` is read and does participate in the hash on `scsi0`** -- it is not ignored or kernel-synthesized. The earlier mismatch (8.1: `product=SSD1G` expected `4MZF-SFTR`, got `3X8K-8K32`) is therefore not "serial is uncontrollable on SCSI" -- it is that the SCSI path's byte-level encoding of `serial=`/`product=` into the 40-byte hash input differs from `ide0`'s, in a way not yet reverse-engineered (padding, truncation via `%19s`, or a different field order than `serial[20] || model[16]`).
 
 This means a **dedicated `scsi0`-targeted collision search is plausible in principle** -- unlike a scenario where the kernel discards/regenerates the identity, here the mapping is deterministic and (based on this one data point) appears to still depend on both `serial=` and `product=`. What's missing is the exact encoding rule for the SCSI path, which would need to be derived either by further disassembly of the `/proc/scsi/usb-storage` parsing/hash-input-assembly code (8.5-8.6 traced the sanitization loops but not the final byte layout used for this specific path) or by black-box probing (vary `serial=` systematically, observe the resulting SOFTWARE IDs, and infer the transform) -- neither has been done yet.
+
+### 8.12 Found the real mechanism: `SG_IO` + standard INQUIRY + VPD page 0x80
+
+Continuing the disassembly of `tools/bin/keyman_7.23.2` around the same function (just before the `GET_BUS_NUMBER`/`/proc/scsi/usb-storage` code from 8.9) turned up a second, more legitimate SCSI-identification path that had not been located before -- and it is almost certainly the one actually responsible for the empirical result in 8.11, not the `/proc/scsi/usb-storage` text parse.
+
+A helper function at `0x804fa51` builds a standard Linux `sg_io_hdr_t` on the stack and calls `ioctl(fd, 0x2285, &sg_io_hdr)`:
+
+```asm
+movl   $0x53, -0x58(%ebp)        ; interface_id = 'S'  (sg_io_hdr_t.interface_id)
+movl   $0xfffffffd, -0x54(%ebp)  ; dxfer_direction = SG_DXFER_FROM_DEV (-3)
+movb   %al, -0x50(%ebp)          ; cmd[0] = CDB opcode byte, taken from the caller's request
+...
+movl   $0x3e8, -0x3c(%ebp)       ; timeout = 1000 ms
+pushl  $0x2285                   ; SG_IO
+calll  ioctl@plt
+```
+
+`0x2285` is the standard Linux `SG_IO` ioctl (`_IOWR('S', 0x85, sg_io_hdr_t)`) -- this is genuine SCSI-generic passthrough, not the ARM32 `NVME_IOCTL_ADMIN_CMD` (`0xc0484e41`) that was initially (and incorrectly) suspected to be the same thing in early ARM32 analysis.
+
+The caller invokes this wrapper twice with different CDB values:
+
+```asm
+movl   $0x12, -0x2a0(%ebp)       ; CDB = 0x00000012 -> opcode 0x12 (INQUIRY), EVPD=0  (standard inquiry)
+...
+calll  0x804fa51                 ; -> vendor/product/revision (this is where "product" comes from)
+...
+movl   $0x800112, -0x2a0(%ebp)   ; CDB bytes (LE) = 12 01 80 00 -> opcode 0x12, EVPD=1, page=0x80
+...
+calll  0x804fa51                 ; -> Unit Serial Number VPD page (this is where "serial" comes from)
+```
+
+`INQUIRY` with `EVPD=1, page=0x80` is the standard SCSI "Unit Serial Number" VPD page -- exactly the mechanism QEMU's `scsi-hd`/`virtio-scsi-pci` backend uses to expose the `serial=` device property to the guest. This is consistent, deterministic, and guest-kernel-independent (unlike the `/proc/scsi/usb-storage` text file, which depends on which kernel subsystem happens to register the device there) -- it directly explains why 8.11's black-box test found `serial=` to be reliably controllable.
+
+**The VPD-80 extraction logic was fully traced and matches the standard SCSI VPD-80 wire format exactly:**
+
+```asm
+movb   -0x21d(%ebp), %al   ; al = response[3]  -- VPD page's "page length" byte (offset 3)
+cmpb   $-6, %al             ; clamp to 0xFA (250) as a safety cap
+jbe    ...
+movzbl %al, %esi            ; esi = clamped length
+xorl   %ebx, %ebx           ; ebx = index, starts at 0
+; loop:
+movzbl -0x21c(%ebp,%ebx), %eax   ; response[4+i]  -- first byte of VPD-80's ASCII serial payload
+pushl  %eax
+calll  isprint@plt
+testl  %eax, %eax
+je     <break>               ; stop at the first non-printable byte
+incl   %ebx
+jmp    <loop>
+; after loop: ebx = count of leading printable bytes (<= page-length byte, <= 250)
+```
+
+This is byte-for-byte the standard T10 VPD page 0x80 layout (`peripheral qualifier/type` (1) + `page code=0x80` (1) + reserved (1) + `page length N` (1) + N bytes of ASCII serial number starting at offset 4) -- the code takes the ASCII payload starting right after the 4-byte VPD header, and copies out the printable-prefix run (bounded by both the page-length byte and a 250-byte safety cap). For QEMU's `serial=` property (which populates this exact VPD-80 payload for `scsi-hd`/`virtio-scsi-pci`), an all-printable-ASCII value like a 20-character serial should therefore be captured in full and unmodified -- consistent with 8.11's clean, deterministic `serial=` -> SOFTWARE-ID mapping.
+
+**The standard-INQUIRY (non-EVPD) result feeds "model"** via a *fixed*-length copy (`0x10` = 16 bytes, no `isprint()` trimming) from response offset 16 -- exactly the standard SCSI INQUIRY "Product Identification" field (bytes 16-31 of the standard 36-byte INQUIRY response). QEMU's `product=` property populates this field, space-padded per the T10 spec, so this is also expected to be a clean, direct copy.
+
+**Precedence resolved:** `GET_BUS_NUMBER` + `/proc/scsi/usb-storage` (8.9) *is* attempted unconditionally, immediately after the two `SG_IO` calls, regardless of whether they succeeded -- but its result is only *used* as a last resort:
+
+```asm
+movl   %esi, %eax     ; esi was set by the SG_IO VPD-80 call: 1 = ioctl succeeded, 0 = failed
+testb  %al, %al
+jne    0x80509fd       ; VPD-80 succeeded -> jump straight to finalization with the SG_IO-derived
+                        ; serial/product, discarding whatever /proc/scsi/usb-storage parsed
+; only reached if VPD-80 FAILED:
+calll  0x804fac1        ; a third, distinct identification routine (not yet traced) -- its result
+                         ; is what actually gets used when SG_IO is unavailable
+```
+
+So the real priority order is: **`SG_IO` (standard INQUIRY + VPD-80 Unit Serial Number) wins whenever it succeeds; `/proc/scsi/usb-storage` text parsing and a third fallback routine at `0x804fac1` are only consulted if `SG_IO` fails outright** (e.g. permission denied on the device node, or the backend doesn't implement SCSI-generic passthrough). For `virtio-scsi-pci`/`scsi-hd` under QEMU -- both of which do support `SG_IO` -- this means 8.12's clean INQUIRY+VPD-80 mechanism is expected to be the one actually in effect, matching 8.11's clean empirical result. This resolves the open precedence question and gives high confidence that the "20-byte printable-ASCII prefix of the VPD-80 payload" and "16-byte raw copy of the standard INQUIRY Product ID field" rules in this section are the real `scsi0` encoding -- a dedicated `scsi0` collision-search implementation is the natural next step, not further disassembly.
