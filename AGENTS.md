@@ -4,7 +4,7 @@ Machine-executable rules for all AI tools working on this Rust project.
 
 ## Project
 
-`ros-serialgen` — RouterOS L6 serial generator + key conversion CLI tool. Computes serials from existing L6 licenses via SOFTWARE ID collision search; custom model strings supported.
+`ros-serialgen` — RouterOS serial generator + key conversion CLI tool. Computes serials from an existing license via SOFTWARE ID collision search; custom model strings supported.
 
 ## Architecture
 

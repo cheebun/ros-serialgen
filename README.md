@@ -1,6 +1,6 @@
-# ros-serialgen — RouterOS L6 Serial Generator & License Key Converter
+# ros-serialgen — RouterOS Serial Generator & License Key Converter
 
-A CLI tool that computes a valid RouterOS serial number from an existing L6 license. For any disk size, it searches for a collision serial whose SOFTWARE ID matches a known L6 signature, so that the existing license activates without mass production. A custom disk model string can also be specified.
+A CLI tool that computes a valid RouterOS serial number from an existing license. For any disk size, it searches for a collision serial whose SOFTWARE ID matches a known signature, so that the existing license activates without mass production. A custom disk model string can also be specified.
 
 ## Features
 

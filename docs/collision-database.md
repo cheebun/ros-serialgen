@@ -8,7 +8,7 @@ For deployment instructions, see [quick-start.md](quick-start.md) or [deployment
 
 ## 1. Known SOFTWARE IDs and Signatures
 
-Eight valid L6 signatures have been recovered (plus ER1G-WVEL/L5 and VI8Q-E90F/L1, kept for reference but out of this project's L6 scope). Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
+Ten valid signatures have been recovered. Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
 
 ### Signature Table
 
@@ -78,9 +78,9 @@ Eight valid L6 signatures have been recovered (plus ER1G-WVEL/L5 and VI8Q-E90F/L
 
 **Key text:** generate on demand with `ros-serialgen sig2key <signature-hex-above>`.
 
-Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). Verified on PVE VM 314 (24G, `ROS24G`, `00000001384936780264`, standard all-zero identity): `/system license print` shows `software-id: G353-EXPG`, `nlevel: 6`, no `expires-in` -- confirmed L6, the 8th working L6 SOFTWARE ID in this project.
+Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). Verified on PVE VM 314 (24G, `ROS24G`, `00000001384936780264`, standard all-zero identity): `/system license print` shows `software-id: G353-EXPG`, `nlevel: 6`, no `expires-in` -- confirmed L6, the 8th working L6 SOFTWARE ID in this project. (An earlier note in this doc attributed this specific verification to the same VM 314 boot used for VI8Q-E90F below; only VI8Q-E90F had actually been checked at that time. G353-EXPG's L6 status was independently confirmed afterward.)
 
-### VI8Q-E90F -- confirmed L1, not L6
+### VI8Q-E90F -- confirmed L1
 
 **MBR hex (80 bytes):**
 ```
@@ -89,7 +89,7 @@ Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad).
 
 **Key text:** generate on demand with `ros-serialgen sig2key <signature-hex-above>`.
 
-Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). Verified on PVE VM 314 (24G, `ROS24G`, `00000000025792894646`, standard all-zero identity): `/system license print` shows `software-id: VI8Q-E90F`, `nlevel: 1`, no `expires-in` (permanent, valid signature) -- but L1, not L6. Out of this project's L6 scope, kept for reference.
+Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad). Verified on PVE VM 314 (24G, `ROS24G`, `00000000025792894646`, standard all-zero identity): `/system license print` shows `software-id: VI8Q-E90F`, `nlevel: 1`, no `expires-in` -- confirmed L1, permanent and valid.
 
 ---
 

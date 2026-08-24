@@ -23,6 +23,7 @@ ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
 | `-c <N>` | `--count <N>` | Number of collisions to find before stopping. `1` (default) stops at the first hit; `0` runs until interrupted (Ctrl+C), collecting every hit. |
 | `-f <N>` | `--from <N>` | Resume the search from N million hashes in, matching the `M` value printed in progress output. Defaults to `0` (start from the beginning). |
 | `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed (`0x100-0x109`), e.g. captured from a real device. Defaults to the standard all-zero identity used by collision search if omitted. See [license-internals.md](license-internals.md#36-marker-and-reserved-generated-from-identity-not-just-checked) for what this changes and why. |
+| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default, verified against real hardware) or `scsi` (`scsi0`/`sata0`/`virtio-scsi-pci` -- forces `sector_val=0`). See [license-internals.md §8.11-8.14](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) -- the SOFTWARE ID computation is confirmed correct in `scsi` mode, but writing a matching MBR does **not** currently result in an activatable license on `scsi`/`sata` bus types (§8.14, unresolved). |
 
 ### Minimum disk size per unit
 
@@ -53,6 +54,7 @@ ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
 | `-m <name>` | `--model <name>` | Disk model string. Defaults to `ROS<N><unit>` if omitted. |
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 | `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed. Same meaning as `search`'s `-i` above. |
+| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default) or `scsi`. Same meaning and caveats as `search`'s `-b` above. |
 
 Prints the computed SOFTWARE ID, and if it matches a known signature, the License Key and MBR hex. When `-i` is given, the printed MBR hex uses that identity instead of the standard all-zero header -- but still assumes standard `BDE800000000` for marker/reserved, which is only correct if you know that's what the source device actually used (see the note above). The `keys.toml` match lookup (`✅ Matched signature: ...`) correctly accounts for `-i`'s mix when comparing.
 

@@ -1,6 +1,6 @@
-# PVE RouterOS L6 VM Deployment Guide
+# PVE RouterOS VM Deployment Guide
 
-Complete reference for creating, licensing, and troubleshooting a RouterOS x86 L6 VM on Proxmox VE.
+Complete reference for creating, licensing, and troubleshooting a RouterOS x86 VM on Proxmox VE.
 
 For a streamlined walkthrough, see [quick-start.md](quick-start.md).
 

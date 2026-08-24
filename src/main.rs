@@ -73,6 +73,11 @@ enum Commands {
         /// device's captured MBR. Default: standard all-zero identity used by collision search.
         #[arg(short = 'i', long)]
         identity: Option<String>,
+        /// Disk bus type: ide (default, verified against real hardware) or scsi
+        /// (scsi0/sata0/virtio-scsi-pci -- forces sector_val=0; see
+        /// docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only).
+        #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
+        bus: BusType,
     },
     /// Convert signature_hex to Key text
     Sig2key {
@@ -107,7 +112,29 @@ enum Commands {
         /// device's captured MBR. Default: standard all-zero identity used by collision search.
         #[arg(short = 'i', long)]
         identity: Option<String>,
+        /// Disk bus type: ide (default, verified against real hardware) or scsi
+        /// (scsi0/sata0/virtio-scsi-pci -- forces sector_val=0; see
+        /// docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only).
+        #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
+        bus: BusType,
     },
+}
+
+/// Disk bus type -- see `docs/license-internals.md` §8 for why this matters.
+///
+/// `keyman` uses entirely different code paths to read serial/model depending on how the
+/// disk is presented to the guest kernel: a real ATA/IDE device (`ide0`) vs. anything routed
+/// through the SCSI subsystem (`scsi0`, `sata0`/AHCI, `virtio-scsi-pci`). This project's
+/// collision database (§1-7) is verified only against `Ide`. `Scsi` mode is derived from
+/// black-box testing on a single 1GiB ARM64 VM (§8.11-8.13) -- treat results as unconfirmed
+/// until independently verified on real hardware.
+#[derive(Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+enum BusType {
+    /// Real ATA/IDE-presented disk (QEMU `ide0`). Standard, verified encoding.
+    Ide,
+    /// SCSI-subsystem-presented disk (`scsi0`, `sata0`, `virtio-scsi-pci`). Forces
+    /// sector_val=0 -- see §8.11-8.13. Unconfirmed beyond one 1GiB test case.
+    Scsi,
 }
 
 /// Disk size unit, paired with the `--disk-size` magnitude
@@ -313,6 +340,19 @@ fn disk_bytes_to_sector_val(total_bytes: u64) -> u32 {
     software_id::round_sectors((total_bytes / 512 >> 11) as u32)
 }
 
+/// Resolve sector_val for the given bus type.
+///
+/// `ide` uses the standard, real-hardware-verified rounding rule (`disk_bytes_to_sector_val`).
+/// `scsi` forces `sector_val=0` regardless of disk size -- confirmed against 7 real boot tests
+/// on a single 1GiB ARM64 VM (docs/license-internals.md §8.11-8.13), not yet verified at other
+/// disk sizes.
+fn sector_val_for_bus(bus: BusType, total_bytes: u64) -> u32 {
+    match bus {
+        BusType::Ide => disk_bytes_to_sector_val(total_bytes),
+        BusType::Scsi => 0,
+    }
+}
+
 /// Build the SHA-256 input buffer (serial + model + sector_val)
 fn build_input_buf(
     serial: &[u8; SERIAL_LEN],
@@ -340,7 +380,8 @@ fn main() {
             count,
             from,
             identity,
-        } => cmd_search(disk_size, unit, threads, model, keys, count, from, identity),
+            bus,
+        } => cmd_search(disk_size, unit, threads, model, keys, count, from, identity, bus),
         Commands::Sig2key { signature_hex } => cmd_sig2key(&signature_hex),
         Commands::Key2sig { key_file } => cmd_key2sig(&key_file),
         Commands::Verify => cmd_verify(),
@@ -351,7 +392,8 @@ fn main() {
             model,
             keys,
             identity,
-        } => cmd_check(&serial, disk_size, unit, model, keys, identity),
+            bus,
+        } => cmd_check(&serial, disk_size, unit, model, keys, identity, bus),
     }
 }
 
@@ -367,10 +409,11 @@ fn cmd_search(
     count: usize,
     from: u64,
     identity: Option<String>,
+    bus: BusType,
 ) {
     validate_disk_size(disk_size, unit);
     let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
-    let sector_val = disk_bytes_to_sector_val(total_bytes);
+    let sector_val = sector_val_for_bus(bus, total_bytes);
     let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
     let num_threads = threads.unwrap_or_else(|| {
         thread::available_parallelism()
@@ -383,7 +426,7 @@ fn cmd_search(
     let start_serial = from * 1_000_000;
 
     verify_6g(&raw_targets);
-    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd, identity.as_deref());
+    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd, identity.as_deref(), bus);
 
     let ctx = Arc::new(SearchContext {
         model_bytes: build_model_bytes(&model),
@@ -433,6 +476,7 @@ fn print_search_banner(
     start_serial: u64,
     use_simd: bool,
     identity: Option<&str>,
+    bus: BusType,
 ) {
     let mode_str = if count == 0 {
         "unlimited".to_string()
@@ -443,6 +487,16 @@ fn print_search_banner(
 
     println!("=== RouterOS L6 Serial Generator ===");
     println!("Disk: {}  Model: {}  SV: 0x{:X}", disk_label, model, sector_val);
+    match bus {
+        BusType::Ide => println!("Bus: ide (verified against real hardware)"),
+        BusType::Scsi => {
+            println!("Bus: scsi (scsi0/sata0/virtio-scsi-pci; sector_val forced to 0)");
+            println!("  WARNING: this encoding is validated against 7 real boot tests on a single");
+            println!("  1GiB ARM64 VM only (docs/license-internals.md §8.11-8.13). sector_val=0 has");
+            println!("  not been confirmed at other disk sizes -- verify any hit on real hardware");
+            println!("  before relying on it.");
+        }
+    }
     match identity {
         Some(hex) => println!("Identity: {} (custom, non-standard mix)", hex.to_uppercase()),
         None => println!("Identity: 00000000000000000000 (standard, all-zero mix)"),
@@ -626,10 +680,11 @@ fn cmd_check(
     model: Option<String>,
     keys: Option<String>,
     identity: Option<String>,
+    bus: BusType,
 ) {
     validate_disk_size(disk_size, unit);
     let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
-    let sector_val = disk_bytes_to_sector_val(total_bytes);
+    let sector_val = sector_val_for_bus(bus, total_bytes);
     let model = model.unwrap_or_else(|| format!("ROS{}", size_label));
     let (mix_lo, mix_hi) = resolve_mix(identity.as_deref());
     let search_targets = targets::load_targets(keys.as_deref(), (mix_lo, mix_hi));
@@ -651,6 +706,10 @@ fn cmd_check(
     println!("Serial: {}", serial_display);
     println!("Model:  {}", model);
     println!("Disk:   {} (SV: 0x{:X})", size_label, sector_val);
+    match bus {
+        BusType::Ide => println!("Bus:    ide (verified against real hardware)"),
+        BusType::Scsi => println!("Bus:    scsi (sector_val forced to 0 -- see docs/license-internals.md §8.11-8.13, validated on one 1GiB ARM64 VM only)"),
+    }
     println!("Identity: {}{}", identity_hex, if identity.is_some() { " (custom)" } else { " (standard)" });
     println!("SOFTWARE ID: {}", sid);
 
@@ -753,6 +812,23 @@ mod tests {
     #[test]
     fn test_min_magnitude_bytes_is_64mb_in_bytes() {
         assert_eq!(SizeUnit::B.min_magnitude(), 64 * 1024 * 1024);
+    }
+
+    // ---- sector_val_for_bus ----
+
+    #[test]
+    fn test_sector_val_for_bus_ide_matches_standard_rounding() {
+        let total_bytes = 6 * 1024 * 1024 * 1024u64; // 6G, matches the known 0x1800 test vector
+        assert_eq!(sector_val_for_bus(BusType::Ide, total_bytes), 0x1800);
+    }
+
+    #[test]
+    fn test_sector_val_for_bus_scsi_is_always_zero() {
+        // Confirmed via 7 real boot tests on a 1GiB ARM64 VM (docs §8.11-8.13) -- scsi mode
+        // forces sector_val=0 regardless of disk size.
+        for total_bytes in [1 * 1024 * 1024 * 1024u64, 6 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024] {
+            assert_eq!(sector_val_for_bus(BusType::Scsi, total_bytes), 0);
+        }
     }
 
     // ---- disk_size_bytes_and_label ----

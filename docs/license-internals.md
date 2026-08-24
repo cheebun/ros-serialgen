@@ -23,7 +23,7 @@ Detailed analysis of the SOFTWARE ID computation, MBR license structure, and the
 ```
 
 - **Identity layer**: Disk hardware parameters + MBR seed compute a unique SOFTWARE ID
-- **Signature layer**: EC-KCDSA over Curve25519; proves this SOFTWARE ID holds an L6 license
+- **Signature layer**: EC-KCDSA over Curve25519; proves this SOFTWARE ID holds a valid license
 - **Verification layer**: RouterOS embedded public key validates the signature on every boot
 
 ---
@@ -619,3 +619,16 @@ This is genuinely shared, cross-architecture source code (as expected, given 8.9
 | 3b | `NVME_IOCTL_ADMIN_CMD` (`0xc0484e41`) via basename match `nvme%dn%d` | NVMe devices (`/dev/nvme0n1` etc.) | NVMe Identify Controller SN (20B)/MN (40B) fields -- this section, only used if priority 2 fails |
 
 Priorities 3a and 3b are tried in an unspecified order relative to each other when priority 2 fails (not yet determined which is attempted first), but neither applies to `scsi0`/`sata0`/`virtio-scsi-pci` disks in practice, since those support `SG_IO` and priority 2 wins before either is reached.
+
+### 8.14 SCSI collision search works for SOFTWARE ID -- but the license still doesn't validate
+
+The `--bus scsi` encoding from 8.11-8.13 (`sector_val=0`, standard `serial[20]+model[16]` layout) was implemented in `ros-serialgen` and run as a real search (see `docs/command-reference.md` for the `-b`/`--bus` flag). It found genuine hits -- e.g. `serial=00000000430480281048`, `model=SSD1G`, `size=1G`, `--bus scsi` computes `C7CU-PGT9`, matching this project's known signature exactly. Booting this combo on a real `scsi0` VM confirmed `software-id: C7CU-PGT9` on `/system license print`, proving the SOFTWARE ID side of 8.11-8.13 is correct and the SCSI-specific search is genuinely usable for finding *matching SOFTWARE IDs*.
+
+**However, writing `C7CU-PGT9`'s known-good MBR (`00...BDE800000000` + its signature) to the standard file offset `0x100` and rebooting did not activate the license** -- `/system license print` kept showing the SOFTWARE ID correctly but stayed in 24-hour trial mode (`expires-in`) instead of `nlevel: 6`. Ruled out:
+
+- **Not the boot-counter (`reserved`, `0x10C-0x10F`) incrementing.** RouterOS bumped it from `00000000` to `01000000` after the first boot, matching documented behavior (§5's installer-intervention table) and consistent with §3.6's finding that `reserved`/`marker` don't affect the SOFTWARE ID computation. Explicitly resetting `reserved` back to `00000000` and rebooting again made no difference -- still trial mode.
+- **Not ARM64-specific.** The same failure to activate (correct SOFTWARE ID, signature doesn't validate) was independently observed on an x86_64 host with a `scsi0`-attached disk as well.
+
+Since this reproduces identically across architectures and is unaffected by `reserved`, the most likely explanation -- not yet confirmed by disassembly -- is that **license *signature validation* (reading the MBR license region at boot, independent of the `serial`/`model` identification code traced in 8.1-8.13) may also be bus-type-dependent**, e.g. not reading from the standard file offset `0x100` at all for SCSI-attached disks, mirroring the same pattern already found for `serial`/`model` reads. This has not been investigated -- 8.1-8.13 only trace how `serial`/`model`/`sector_val` become the SOFTWARE ID input; the boot-time MBR-read/signature-verify code path (§5's "License Verification Flow") is a distinct, not-yet-disassembled part of `keyman`/`nova`.
+
+**Practical implication:** a `--bus scsi` search can currently find a serial whose *computed SOFTWARE ID* matches a known signature (useful for research, and confirmed accurate), but **does not yet result in an activatable license** on `scsi0`/`sata0`/`virtio-scsi-pci` -- full activation on those bus types remains unsolved pending disassembly of the MBR-read path used during boot-time signature verification.
