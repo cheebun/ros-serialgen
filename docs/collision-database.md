@@ -547,3 +547,19 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 | Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
 |---|---|---|---|---|
 | 1,073,741,824,000 | `ROS1000G` | `00000000166128957477` | C7CU-PGT9 | Y |
+
+---
+
+## 3. `scsi0`/`virtio-scsi-pci` Results
+
+Everything above is verified for `ide0` only -- `keyman` computes the SOFTWARE ID differently for SCSI-presented disks (see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). Use `ros-serialgen search -b scsi` to search specifically for this bus type; results below are **not** interchangeable with the `ide0` table.
+
+**Unlike `ide0`, disk size does not matter for `scsi0`** -- `sector_val` is always `0` on this path regardless of the disk's actual byte count (confirmed at both 1GiB and 2GiB, §8.19), so a single `serial=`/`product=` combo below activates on a `scsi0` disk of *any* size. No size-specific table needed.
+
+| Actual Size (bytes) | Model | Serial | SOFTWARE ID | Bus | Verified |
+|---|---|---|---|---|---|
+| 1,073,741,824 | `SSD1G` | `00000000430480281048` | C7CU-PGT9 | `scsi0` (x86_64, `virtio-scsi-pci`) | Y |
+| 1,073,741,824 | `SSD1G` | `00000000497177721400` | G353-EXPG | `scsi0` (ARM64, `virtio-scsi-pci`) | SOFTWARE ID only -- activation not confirmed |
+| 1,073,741,824 | `SSD1G` | `00000000585847078845` | WUB2-EYCK | `scsi0` (ARM64, `virtio-scsi-pci`) | SOFTWARE ID only -- activation not confirmed |
+
+`C7CU-PGT9` above was fully activated end-to-end on x86_64 (fresh install, standard PVE-default `smbios1`, `qemu-nbd` MBR write, single boot -- `/system license print` shows `nlevel: 6`, no `expires-in`). The other two were only confirmed to compute the correct SOFTWARE ID on an ARM64 VM (`virt` machine type) where full signature activation did not succeed due to a separate, ARM64-specific virtualization-detection issue in `keyman` -- see license-internals.md §8.15-8.18 for details. Re-verify these two on x86_64 (or on real ARM64 hardware) before relying on them for activation.

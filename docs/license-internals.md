@@ -632,3 +632,132 @@ The `--bus scsi` encoding from 8.11-8.13 (`sector_val=0`, standard `serial[20]+m
 Since this reproduces identically across architectures and is unaffected by `reserved`, the most likely explanation -- not yet confirmed by disassembly -- is that **license *signature validation* (reading the MBR license region at boot, independent of the `serial`/`model` identification code traced in 8.1-8.13) may also be bus-type-dependent**, e.g. not reading from the standard file offset `0x100` at all for SCSI-attached disks, mirroring the same pattern already found for `serial`/`model` reads. This has not been investigated -- 8.1-8.13 only trace how `serial`/`model`/`sector_val` become the SOFTWARE ID input; the boot-time MBR-read/signature-verify code path (§5's "License Verification Flow") is a distinct, not-yet-disassembled part of `keyman`/`nova`.
 
 **Practical implication:** a `--bus scsi` search can currently find a serial whose *computed SOFTWARE ID* matches a known signature (useful for research, and confirmed accurate), but **does not yet result in an activatable license** on `scsi0`/`sata0`/`virtio-scsi-pci` -- full activation on those bus types remains unsolved pending disassembly of the MBR-read path used during boot-time signature verification.
+
+### 8.15 Found it: on QEMU/KVM, `readMBR` doesn't touch the disk at all -- it uses `/dev/hvckvm0`
+
+Disassembling `readMBR`'s internals resolves 8.14. `readMBR` first calls a cached predicate (`0x804f902`) that is **byte-for-byte the same `getenv("board")` + `strstr(..., "qemu")` check already found on ARM32** (§8.9's virtualization-detection function) -- confirming this is shared, cross-architecture logic, not something new.
+
+When that predicate is true (i.e. running under QEMU/KVM, which covers essentially every PVE VM), `readMBR` skips the physical-flash path (`/dev/flash` + custom `0x4601`/`0x90004602` ioctls, for real RouterBOARD hardware) entirely and instead:
+
+```asm
+calll  0x804f76f            ; a second, more specific gate check
+testb  %al, %al
+je     <fail>                ; bail out if false
+
+pushl  $2                     ; O_RDWR
+pushl  $"/dev/hvckvm0"        ; MikroTik-private hypervisor virtual console device
+calll  open@plt
+...
+calll  tcgetattr@plt          ; configure it as a raw terminal (no echo, no canonical mode, etc.)
+calll  tcsetattr@plt
+...
+; later, via 0x804f9a0(fd, cmd=6, len=0x208):
+write(fd, {len=8, cmd=6}, 8)  ; send an 8-byte request: "read command 6"
+read(fd, buf, 0x208)           ; read back a 520-byte response (512-byte sector + 8-byte header?)
+```
+
+`/dev/hvckvm0` ("hvc" = hypervisor virtual console, the standard Linux paravirtualized-console naming convention used by Xen/KVM `virtio-console`) is a **MikroTik-private device node, not a standard block device**. This means: **on any QEMU/KVM-detected VM, `readMBR` never reads the guest disk file at all** -- it sends a small request over this console channel and expects a companion process (presumably MikroTik's own CHR-specific QEMU integration, or a host-side helper backing this virtio-console) to respond with sector data. Writing directly to the disk image via `qemu-nbd` (as done throughout this project, including 8.14's failed activation attempt) **never touches whatever `/dev/hvckvm0` actually returns** -- these are two completely independent data paths.
+
+This fully explains 8.14's mystery without needing any further bus-type-dependent hypothesis: the MBR write itself was never going to be read back by a standard PVE VM, because standard PVE VMs almost certainly don't provide a working `/dev/hvckvm0` backend (this is CHR/MikroTik-cloud-image-specific QEMU integration that a plain `qm create`-built VM has no reason to implement). Whether `open("/dev/hvckvm0")` succeeds or fails inside our test VMs, and if it fails, what `readMBR` falls back to (if anything), has not yet been checked -- this is the next concrete step, and does not require any more static disassembly to investigate (it's a runtime/environment question: does `/dev/hvckvm0` exist in the guest, and if not, does `readMBR` have any further fallback beyond this one already-traced branch).
+
+### 8.16 `/dev/hvckvm0` traced further: it's the standard Linux `hvc0` virtio-console driver, self-provisioned, with no fallback on failure
+
+The gate function `0x804f76f` was disassembled and resolves the remaining questions in 8.15:
+
+```asm
+cmpb   $0x0, <cached_flag>
+je     <compute>
+retl                               ; return cached result on repeat calls
+
+; first call:
+pushl  <stat_buf>
+pushl  $"/dev/hvckvm0"
+calll  stat@plt
+testl  %eax, %eax
+jne    <not_found>                 ; stat failed -> device node doesn't exist yet
+movb   $1, <cached_ok_flag>        ; already exists -> success, done
+...
+<not_found>:
+pushl  $"r"
+pushl  $"/sys/class/tty/hvc0/dev"
+calll  fopen@plt
+testl  %eax, %eax
+je     <fail>                       ; sysfs entry doesn't exist either -> give up (cached_ok_flag stays 0)
+...
+fscanf(fp, "%u:%u", &major, &minor)
+fclose(fp); unlink("/dev/hvckvm0")
+mknod("/dev/hvckvm0", S_IFCHR|0777, makedev(major, minor))
+movb   $1, <cached_ok_flag>
+```
+
+`hvc0` ("Hypervisor Virtual Console") is a **standard upstream Linux kernel driver** (`CONFIG_HVC_DRIVER`), used for Xen PV consoles and `virtio-console` devices -- it is not a MikroTik invention. `/sys/class/tty/hvc0/dev` is the normal sysfs path any Linux kernel exposes for a registered `tty` device's `major:minor`, used here purely to self-provision the `/dev/hvckvm0` node (since a CHR image's minimal `/dev` may not have it pre-populated by udev). The logic reduces to: **"does this VM have a `virtio-console` (or Xen console) device attached to the guest?"** -- if yes, use it as the MBR data channel; if no, `readMBR` returns failure with **no further fallback** on this code path.
+
+Standard PVE VMs created via `qm create`/`qm set` (including every VM used in this session, and almost certainly the historical `ide0` VMs behind this project's verified collision-database entries) **do not attach a `virtio-console` device by default** -- PVE's `serial0: socket` option (used throughout this project for console access) provisions an **isolated PC-style UART** (`ttyS0`/`COM1`), which is a completely different QEMU device (`isa-serial`/`pci-serial`) from `virtio-console` (`virtconsole`/`virtio-serial-bus`). Having `serial0: socket` configured does **not** make `/sys/class/tty/hvc0` appear.
+
+This raises a real, testable question this section does not yet answer: **the project's own collision-database entries were verified as fully activated (`nlevel: 6`, no `expires-in`) on plain PVE `ide0` VMs** -- if `board` containing `"qemu"` unconditionally forces this `hvc0`-only path with no fallback, how did those succeed without a `virtio-console` device? Two explanations are consistent with the evidence so far, neither yet confirmed:
+
+1. **The `board` environment variable's actual value differs by VM configuration** (machine type, `smbios1` overrides, BIOS vs. OVMF, etc.), and the historically-successful `ide0` VMs' `board` value happened not to contain the substring `"qemu"` -- in which case `0x804f902` returns false immediately and `readMBR` takes the `/dev/flash`-then-generic-`fopen()` path from 8.15 instead (which, being a plain file read, would work identically on `ide0` regardless of bus type).
+2. **`ide0` disks are read through an entirely different, not-yet-traced license-verification code path** that doesn't share this `readMBR` function's `board=qemu` branch at all.
+
+**Next step (empirical, no further disassembly needed):** compare `getenv("board")`'s actual value between a VM known to activate successfully on `ide0` and the `scsi0` VMs used in 8.11-8.15 -- if the `ide0` VM's value doesn't contain `"qemu"`, explanation 1 is confirmed, and the practical fix for `scsi0`/`sata0` activation becomes straightforward: override the VM's reported `board`/SMBIOS values so `"qemu"` isn't a substring, steering `readMBR` back onto the `/dev/flash`-or-generic-file-read path instead of the `hvc0`-only one.
+
+### 8.17 Tried overriding SMBIOS to dodge `board=qemu` -- landed in a third, different detection branch (`MetaROUTER`)
+
+To test 8.16's hypothesis directly, PVE's `smbios1` `product`/`manufacturer` fields were overridden away from the QEMU defaults (`qm set <vmid> --smbios1 uuid=<existing>,product=<base64>,manufacturer=<base64>,base64=1`, non-default values chosen to avoid the substring `"qemu"`), keeping everything else (disk, `serial=`/`product=` SCSI properties, `-b scsi` search target) identical to the already-confirmed `C7CU-PGT9` combo from 8.14.
+
+**Result: the boot behavior changed completely, but not to the expected `/dev/flash`-fallback path.** Before the override, boot showed the normal 24-hour CHR trial banner (`software-id: ..., expires-in: 23hXXm`). After the override:
+
+- The CLI prompt changed from `[admin@arm64]` to **`[admin@MetaROUTER]`**.
+- The boot banner changed to `ROUTER HAS NO SOFTWARE KEY` with an unusual **~136-year** countdown (`1193046h27m`) instead of the normal 24-hour trial.
+- `/system license print` now shows **only** `software-id: C7CU-PGT9` -- no `expires-in` line at all (neither the trial state nor a fully-activated `nlevel: 6` state).
+
+This is RouterOS's **`MetaROUTER`** mode -- MikroTik's nested-virtualization feature where a guest router is normally expected to receive its license from a *parent* RouterOS instance rather than validating its own disk MBR, which plausibly explains why the normal trial/license flow is bypassed entirely once this mode is detected.
+
+The trigger was located via a debug string in `lib/libumsg.so` (shared across the whole `nova` framework, not `keyman`-specific):
+
+```
+"open /dev/rb failed, probably metarouter"
+```
+
+i.e. **a third hardware-presence check**, independent of both `readMBR`'s `board`-string check (8.15-8.16) and the `/dev/hvckvm0` virtio-console path (8.15-8.16): the framework tries to `open("/dev/rb")` (a "RouterBOARD" device -- distinct from `/dev/flash` and `/dev/hvckvm0`), and if that fails, concludes "probably MetaROUTER" and apparently short-circuits the normal boot-time license flow well before `readMBR`'s own `board=qemu` branching is reached.
+
+**Net result: changing `smbios1` did successfully steer the platform-detection logic away from `board=qemu`, but toward a different special-cased mode rather than the plain-hardware `/dev/flash`/generic-file-read path 8.16 hypothesized.** This is not yet a working activation path, and not yet a dead end either -- the open questions are:
+
+- What exact condition triggers the `/dev/rb`-absence -> "MetaROUTER" conclusion, and is it purely `open()` failing, or does it also depend on the same `board` string (e.g. some other substring match, not just absence of `"qemu"`)?
+- Does the *original* `board=qemu` value (unmodified SMBIOS) also fail `open("/dev/rb")` -- i.e. is `/dev/rb` open failing on *every* QEMU VM regardless of `board`, with `board=qemu` normally taking priority and being checked *first* (explaining why the un-modified VMs never showed `MetaROUTER` -- the `board=qemu` branch intercepted the check before `/dev/rb` was ever tried)? If so, the real fix may require a `board`/SMBIOS value that is simultaneously **not** `"qemu"`-like *and* somehow satisfies (or avoids) the `/dev/rb`-presence check -- which likely means creating an actual `/dev/rb` device node (analogous to 8.15's `/dev/flash`) rather than relying on `smbios1` alone.
+- Whether `flash.ko` (a real, present kernel module in this image that also references `MetaROUTER` per the string search) is involved in provisioning `/dev/rb`, the way `hvc0`/sysfs was used to self-provision `/dev/hvckvm0` in 8.16 -- not yet disassembled.
+
+This has not been resolved -- continuing requires disassembling `libumsg.so`'s `MetaROUTER`-detection function (the `open("/dev/rb")` caller) and `flash.ko` to determine what, if anything, would make `/dev/rb` present and change this outcome.
+
+### 8.18 Resolved on x86_64: `scsi0` activates cleanly out of the box, no SMBIOS tricks needed -- this was an ARM64/`virt`-machine-type quirk, not a SCSI limitation
+
+A fresh, minimal-config test settles 8.9-8.17's remaining open question. A brand-new x86_64 PVE VM was built from scratch (cloned from a working RouterOS template, default `smbios1` -- **no product/manufacturer override at all**):
+
+- `scsihw: virtio-scsi-pci`, `scsi0` disk, 1G, `serial=00000000430480281048`, `-set device.scsi0.product=SSD1G` (the exact `--bus scsi` search hit from 8.14/`C7CU-PGT9`)
+- Fresh RouterOS 7.24 install directly onto the `scsi0` disk (installer run via `qm sendkey`, `a`/`i`/`y`)
+- Shut down (not rebooted) per the standard MBR-write procedure, then the standard `00...BDE800000000` + `C7CU-PGT9` signature MBR written via `qemu-nbd`
+- Booted once
+
+Result: `/system license print` shows
+
+```
+software-id: C7CU-PGT9
+nlevel: 6
+features:
+```
+
+**Fully activated -- no `expires-in`, `nlevel: 6`, on the first boot, with zero SMBIOS manipulation.** This is the cleanest possible confirmation that the `--bus scsi` SOFTWARE-ID encoding (8.11-8.13) and the standard MBR-write activation procedure both work correctly and completely on a real `scsi0`/`virtio-scsi-pci` disk -- there is no `scsi0`-specific activation problem on x86_64.
+
+**This reframes 8.14-8.17 entirely.** The activation failures documented there were specific to the **ARM64 test VM's `virt` QEMU machine type**, not to `scsi0`/SCSI as a bus type in general.
+
+One assumption from 8.16-8.17 needs correcting, though: it is **not** simply "x86's DMI doesn't say QEMU." Checked directly via `/system resource print` on the working x86 VM: `board-name: x86 QEMU Standard PC (Q35 + ICH9, 2009)` -- this **does** contain `"QEMU"`, just like the ARM64 VM's `board-name: arm64 QEMU KVM Virtual Machine` did. Both platforms' *displayed* `board-name` contain the substring, yet only ARM64 hit the problem branch. This means **`keyman`'s internal `getenv("board")` value is not simply identical to the `board-name` string shown by `/system resource print`** -- they likely come from related but distinct sources (or different case-normalization), and `strstr(getenv("board"), "qemu")` is a case-sensitive C string search, so the exact casing of whatever `board` actually contains matters and has not been directly captured (no way to read `keyman`'s process environment from the RouterOS CLI). The `board=qemu` / `MetaROUTER` / `/dev/hvckvm0` detection maze in 8.15-8.17 is still confirmed real via disassembly, but *why* it triggers on this specific ARM64/`virt` setup and not on x86_64/`q35` remains an open, unexplained platform difference -- not the simple "x86 board name lacks qemu" explanation originally assumed here.
+
+**Practical implication -- superseding 8.10's blanket warning:** `--bus scsi` search results **are** activatable, at least on x86_64 with a standard PVE-default `smbios1` (no override required). The remaining open question is narrower than previously stated: does `scsi0` activation also work on **ARM64** with a `board`/SMBIOS value that avoids `"qemu"` *and* avoids triggering the `MetaROUTER` fallback from 8.17 (e.g. a value resembling real RouterBOARD ARM64 hardware) -- this was not retested after 8.18's x86 result and remains open specifically for ARM64/`virt`, not for `scsi0` in general.
+
+### 8.19 `sector_val=0` confirmed size-independent -- tested at 2GiB, not just 1GiB
+
+8.11's `sector_val=0` finding was originally validated against 7 real boot tests, all on a single 1GiB disk -- leaving open whether `sector_val=0` was a genuine, size-independent property of the `scsi0` path, or coincidentally zero only for that one disk size.
+
+Retested with a **fresh install** on a **2GiB** `scsi0` disk (same host as 8.18, same `serial=00000000430480281048`/`product=SSD1G` -- only the disk size changed): full activation succeeded identically -- `software-id: C7CU-PGT9`, `nlevel: 6`, no `expires-in`, same as the 1GiB case. Since `--bus scsi` computes the same SOFTWARE ID at 1GiB and 2GiB for the same `serial=`/`product=` (both force `sector_val=0` regardless of the actual disk size passed to `ros-serialgen search -s`), and both independently activate against the same signature, this confirms `sector_val=0` is **not** a 1GiB-specific coincidence -- it holds across at least two different disk sizes on `scsi0`. The size caveat in 8.11-8.13's wording can be considered resolved for x86_64/`virtio-scsi-pci`.
+
+**Practical implication: on `scsi0`, the actual disk size is irrelevant to which `serial=`/`product=` combo you need.** This is a real, useful difference from `ide0`: `ide0`'s SOFTWARE ID depends on `sector_val`, which is derived from the disk's exact byte count, so an `ide0` collision result is only valid for a disk of that *exact* size (§6, §3.4). On `scsi0`, since `sector_val` is always `0` regardless of the disk's real size, **a single `serial=`/`product=` combo found via `ros-serialgen search -b scsi -s <any size>` will activate on a `scsi0` disk of *any* size** -- there is no need to match the search size to the deployed disk size, and no need to maintain size-specific tables the way `docs/collision-database.md` §2 does for `ide0`. The `-s`/`-u` flags still need *some* value when running `search -b scsi` (they're required CLI arguments), but the resulting `serial=`/`product=` pair is size-agnostic in practice for `scsi0` deployments.
