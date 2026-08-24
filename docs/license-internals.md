@@ -582,3 +582,40 @@ calll  0x804fac1        ; a third, distinct identification routine (not yet trac
 ```
 
 So the real priority order is: **`SG_IO` (standard INQUIRY + VPD-80 Unit Serial Number) wins whenever it succeeds; `/proc/scsi/usb-storage` text parsing and a third fallback routine at `0x804fac1` are only consulted if `SG_IO` fails outright** (e.g. permission denied on the device node, or the backend doesn't implement SCSI-generic passthrough). For `virtio-scsi-pci`/`scsi-hd` under QEMU -- both of which do support `SG_IO` -- this means 8.12's clean INQUIRY+VPD-80 mechanism is expected to be the one actually in effect, matching 8.11's clean empirical result. This resolves the open precedence question and gives high confidence that the "20-byte printable-ASCII prefix of the VPD-80 payload" and "16-byte raw copy of the standard INQUIRY Product ID field" rules in this section are the real `scsi0` encoding -- a dedicated `scsi0` collision-search implementation is the natural next step, not further disassembly.
+
+### 8.13 `0x804fac1` traced: it's the same NVMe fallback as ARM32, confirmed identical
+
+`0x804fac1` -- the "third fallback", only reached when the `SG_IO` VPD-80 call fails outright -- turns out to be **the exact same NVMe-specific mechanism already documented for ARM32** (§8.1-8.4's `keyman_arm32` analysis), not a new, distinct code path. Confirmed byte-for-byte:
+
+```asm
+movb   $0x6, -0x1060(%ebp)       ; cmd_len = 6 (NVMe admin-command CDB-style length)
+pushl  $0xc0484e41                ; NVME_IOCTL_ADMIN_CMD -- identical constant to the ARM32 binary
+movl   $0x1000, -0x103c(%ebp)     ; 4096-byte response buffer (NVMe Identify Controller response size)
+calll  ioctl@plt
+je     <process NVMe Identify response>   ; ioctl succeeded -> use it directly
+
+; only reached if the ioctl on the ORIGINAL fd fails:
+calll  basename@plt
+pushl  $"nvme%dn%d"                ; sscanf the device basename against this pattern
+calll  sscanf@plt
+...                                 ; if it matches, open "/dev/nvme<N>" and retry the same
+                                     ; NVME_IOCTL_ADMIN_CMD ioctl against that controller node
+```
+
+And the response parsing confirms the same field widths as ARM32's NVMe path:
+
+```asm
+strnlen(buf_at_offset_20, 0x28)   ; 0x28 = 40 -- NVMe "Model Number" field width
+strnlen(buf_at_offset_0,  0x14)   ; 0x14 = 20 -- NVMe "Serial Number" field width
+```
+
+This is genuinely shared, cross-architecture source code (as expected, given 8.9's confirmation for the `SG_IO`/`GET_BUS_NUMBER` paths) -- there is no separate, not-yet-found x86-specific fallback. **The complete, now fully-traced hardware-identification priority chain for `keyman`/`nova`, across both architectures:**
+
+| Priority | Mechanism | Bus types it actually works for | Source of `serial`/`model` |
+|---|---|---|---|
+| 1 | `ioctl(HDIO_DRIVE_CMD)` (`0x31f`) | `ide0` (real ATA/IDE) | Real ATA IDENTIFY data -- ground truth for this project's collision database (§1-7) |
+| 2 | `ioctl(SG_IO)` (`0x2285`): standard INQUIRY + EVPD page 0x80 | `scsi0`, `sata0`/AHCI, `virtio-scsi-pci` -- anything with working SCSI-generic passthrough | Product ID field (16B, raw) + VPD-80 printable-ASCII prefix (up to 20B) -- §8.12, confirmed to track QEMU's `serial=`/`product=` |
+| 3a | `SCSI_IOCTL_GET_BUS_NUMBER` (`0x5386`) + `/proc/scsi/usb-storage/<bus>` text parse | Literal USB-attached storage only | `Serial Number: %19s` line -- §8.6, only used if priority 2 fails |
+| 3b | `NVME_IOCTL_ADMIN_CMD` (`0xc0484e41`) via basename match `nvme%dn%d` | NVMe devices (`/dev/nvme0n1` etc.) | NVMe Identify Controller SN (20B)/MN (40B) fields -- this section, only used if priority 2 fails |
+
+Priorities 3a and 3b are tried in an unspecified order relative to each other when priority 2 fails (not yet determined which is attempted first), but neither applies to `scsi0`/`sata0`/`virtio-scsi-pci` disks in practice, since those support `SG_IO` and priority 2 wins before either is reached.
