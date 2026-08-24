@@ -31,6 +31,15 @@ A multi-threaded brute-force searcher was built (initially in C, then rewritten 
 
 MTBase64 encode/decode was obtained from the MTLic project. Key text was found to be `MTBase64Encode(MBR[0x110:0x150])`. All four key texts were recovered, enabling both MBR write and key import activation methods.
 
+### Phase 6: Bus-Type Dependence (`ide0` vs `scsi0`/`sata0`)
+
+All of Phases 1-5 were verified exclusively against `ide0`-attached disks. Applying a verified `serial=`/`model=` combo to a `scsi0`/`sata0`/`virtio-scsi-pci` disk produces a **different** SOFTWARE ID for the identical parameters. Reverse-engineering both the ARM32 (`nova/bin/keyman` from a RouterOS ARM64 image) and x86 (`keyman_7.23.2`) binaries traced this to `keyman` using an entirely different hardware-identification code path depending on how the disk is presented to the guest kernel:
+
+- `ide0`: `ioctl(HDIO_DRIVE_CMD)` succeeds -> real ATA IDENTIFY data is used (Phases 1-5's basis)
+- `scsi0`/`sata0`/`virtio-scsi-pci`: that ioctl fails, falling through to `ioctl(SG_IO)` -- standard SCSI INQUIRY (model) + EVPD page 0x80 Unit Serial Number (serial) -- and, critically, `sector_val` is **always `0`** on this path regardless of the disk's actual size (empirically confirmed at both 1GiB and 2GiB)
+
+`ros-serialgen search`/`check` gained a `-b`/`--bus <ide|scsi>` flag for this. `scsi0` activation was confirmed to work end-to-end on x86_64 (fresh install, standard PVE-default SMBIOS, single boot -> `nlevel: 6`). On ARM64 specifically, a separate QEMU/KVM-virtualization-detection code path in `keyman` (triggered by the guest's `board` environment variable) can additionally interfere with license *signature* validation even when the SOFTWARE ID itself is computed correctly -- this remains only partially understood. Full details, including the disassembly evidence, are in [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation).
+
 ---
 
 ## 2. Algorithm Details
@@ -38,10 +47,11 @@ MTBase64 encode/decode was obtained from the MTLic project. Key text was found t
 ### SOFTWARE ID Computation
 
 ```
-Inputs:
+Inputs (ide0 -- see Phase 6 / license-internals.md §8 for scsi0's different sourcing):
   serial     = 20 bytes (disk serial number, from ATA IDENTIFY or QEMU serial=)
   model      = 16 bytes (disk model name, truncated or space-padded to 16)
-  sector_val = 4 bytes  (total_sectors >> 11, rounded to 4-bit boundary)
+  sector_val = 4 bytes  (total_sectors >> 11, rounded to 4-bit boundary;
+                         always 0 on scsi0/sata0/virtio-scsi-pci, regardless of disk size)
 
 Steps:
   1. buf[40] = serial[20] || model[16] || LE32(sector_val)
@@ -112,10 +122,10 @@ The identity region (`0x100-0x10F`) and signature region (`0x110-0x14F`) are fun
 ```
 SOFTWARE ID space:  ~40 bits
 Serial space:       20 bytes = 160 bits (charset: [0-9A-Za-z-])
-Known signatures:   4
-Probability/hash:   4 / 2^40 ~ 3.6 * 10^-12
+Known signatures:   10 (current)
+Probability/hash:   10 / 2^40 ~ 9.1 * 10^-12
 Search speed:       ~40M hashes/sec (16-core C), higher with AVX-512 Rust
-Expected time:      2^40 / (4 * 40M) ~ 7000 sec ~ 2 hours
+Expected time:      2^40 / (10 * 40M) ~ 2700 sec ~ 45 minutes
 ```
 
 ### Scaling with More Signatures
@@ -124,8 +134,7 @@ Search time is inversely proportional to the number of known signatures:
 
 | Known Signatures | Probability/Hash | Estimated Time (16 cores) |
 |---|---|---|
-| 4 (current) | 4 / 2^40 | ~2 hours |
-| 10 | 10 / 2^40 | ~48 minutes |
+| 10 (current) | 10 / 2^40 | ~45 minutes |
 | 100 | 100 / 2^40 | ~5 minutes |
 | 1000 | 1000 / 2^40 | ~30 seconds |
 
@@ -133,7 +142,7 @@ Each new RouterOS image or licensed disk yields a new SOFTWARE ID + signature pa
 
 ### Why MBR-Only Modification Fails
 
-The MBR identity region contributes only 11 bits (`mbr_val`), giving 2048 possible SOFTWARE IDs per serial/model/size combination. Matching one of 4 targets from 2048 candidates would require ~270 million known signatures for 50% success -- impractical.
+The MBR identity region contributes only 11 bits (`mbr_val`), giving 2048 possible SOFTWARE IDs per serial/model/size combination -- but those 2048 values are a fixed subset of the full ~2^40 SOFTWARE ID space, not independently drawn from it. The probability that any of them lands on one of N known targets is `2048 * N / 2^40`, not `N / 2048` -- for the current 10 signatures, that's `2048 * 10 / 2^40 ~ 1.9 * 10^-8` per (serial, MBR) combination, requiring on the order of 2^40/2048 ~ 5 * 10^8 signatures for 50% success by varying MBR alone. This is the same difficulty as brute-forcing the full serial space (§ above) -- there is no shortcut from limiting the search to MBR/identity bytes.
 
 ---
 

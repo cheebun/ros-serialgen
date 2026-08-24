@@ -331,7 +331,7 @@ At 40M hashes/sec (16 cores): ~4750 sec ~ 80 min
 
 ### Why MBR-Only Modification Does Not Work
 
-The MBR identity region contributes only 11 bits to the SOFTWARE ID via `mbr_val`. With serial/model/size fixed, only 2048 distinct SOFTWARE IDs are reachable. The probability of hitting one of 4 targets from 2048 options is `4/2048 ~ 0.2%` -- and you cannot iterate, because you need the MBR to remain valid.
+The MBR identity region contributes only 11 bits to the SOFTWARE ID via `mbr_val`. With serial/model/size fixed, only 2048 distinct SOFTWARE IDs are reachable -- but those 2048 are a fixed subset of the full ~2^40 SOFTWARE ID space, not independently drawn from it. The probability that any of them equals one of N known targets is `2048 * N / 2^40`, not `N/2048`: for this project's 10 known signatures, that's `2048 * 10 / 2^40 ~ 1.9 * 10^-8` per (serial, MBR) combination -- varying only the MBR while holding serial/model/size fixed is exactly as hard as brute-forcing the full serial space (§ Collision Search Mechanism below), not a shortcut. (An earlier version of this section stated a much more optimistic `4/2048 ~ 0.2%`, which conflated "how many values are reachable" with "probability of matching a specific external target" -- corrected here.)
 
 ### Fixed MBR Header in Collision Scheme
 

@@ -37,11 +37,19 @@ qm sendkey ${VMID} ret
 # 2. Wait for the package selection screen to load
 sleep 60
 
-# 3. Navigate to and toggle the desired package (e.g. "container", two entries
-#    down from the default cursor position), then start the install
+# 3a. Select package(s). Move the cursor with `down`/`up`, toggle the
+#     highlighted package with `spc` -- repeat down/spc for each additional
+#     package you want (selecting one package or several both work the same
+#     way). Example: toggle the package two entries down from the default
+#     cursor position (e.g. "container"):
 qm sendkey ${VMID} down
 qm sendkey ${VMID} down
 qm sendkey ${VMID} spc
+
+# 3b. Start the install -- send this as its own step, after package
+#     selection is done (don't fold it into the same call as 3a: `i` starts
+#     the install immediately, so any `down`/`spc` you meant to send first
+#     needs to have already landed):
 qm sendkey ${VMID} i
 
 # 4. Confirm the "all data will be erased" warning
@@ -67,6 +75,15 @@ qm stop ${VMID} --skiplock
 sleep 3
 qm start ${VMID}
 ```
+
+## `scsi0`/`virtio-scsi-pci` variant
+
+Everything above works identically for a `scsi0`-attached disk -- the installer's `sendkey` sequence doesn't care about disk bus type. Differences vs. the `ide0` examples above:
+
+- Use `ros-serialgen search`/`check -b scsi` to get a `serial=`/`product=` combo (not `-model=`/`-serial=` from an `ide0` search -- see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) for why they're not interchangeable).
+- VM config: `--scsihw virtio-scsi-pci`, `--scsi0 local:<vmid>/vm-<vmid>-disk-1.qcow2,serial=<serial>,size=<any size>` (disk size is irrelevant on `scsi0` -- `sector_val` is always `0` regardless of actual disk size, confirmed at both 1GiB and 2GiB), plus `--args '-set device.scsi0.product=<product>'` (no `vendor=` override needed -- it was confirmed to never participate in the hash computation).
+- The MBR write step (below) is unchanged -- same offset (`0x100`), same header format, same signature encoding, regardless of bus type.
+- Confirmed to fully activate (`nlevel: 6`, no `expires-in`) end-to-end on x86_64 with a fresh install and standard PVE-default `smbios1` -- no special SMBIOS configuration required.
 
 ## Verifying the result without console access
 
