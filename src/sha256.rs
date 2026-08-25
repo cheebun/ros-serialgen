@@ -35,16 +35,16 @@ pub fn hash_40(data: &[u8; 40]) -> (u32, u8) {
     padded[62] = 0x01;
     padded[63] = 0x40;
 
-    let (a, b) = compress(&padded);
+    let state = compress(&padded);
 
     // ---- Output ----
     // SHA-256 standard output is big-endian: a's byte order is [MSB, ..., LSB]
     // RouterOS reads the first 4 bytes little-endian → equivalent to a byte reversal
-    let a_be = a.to_be_bytes();
+    let a_be = state[0].to_be_bytes();
     let sid_lo = u32::from_le_bytes(a_be);
 
     // sid_hi = the most significant big-endian byte of the second u32 (b)
-    let sid_hi = b.to_be_bytes()[0];
+    let sid_hi = state[1].to_be_bytes()[0];
 
     (sid_lo, sid_hi)
 }
@@ -63,16 +63,40 @@ pub fn hash_10(data: &[u8; 10]) -> u16 {
     // message length = 10 × 8 = 80 bits = 0x50, written into the last byte (big-endian)
     padded[63] = 0x50;
 
-    let (a, _b) = compress(&padded);
-    let a_be = a.to_be_bytes();
+    let state = compress(&padded);
+    let a_be = state[0].to_be_bytes();
     u16::from_le_bytes([a_be[0], a_be[1]])
+}
+
+/// MikroTik custom SHA-256 over an arbitrary short input (must fit in a single 64-byte block
+/// after standard padding, i.e. `data.len() <= 55`), returning the full 32-byte digest in
+/// standard big-endian byte order. Used by `curve25519::verify`'s EC-KCDSA hashing steps
+/// (called only on 16-byte and 32-byte inputs, both well within the single-block limit).
+pub fn mikro_sha256_digest(data: &[u8]) -> [u8; 32] {
+    assert!(
+        data.len() <= 55,
+        "mikro_sha256_digest only supports single-block input (<=55 bytes), got {}",
+        data.len()
+    );
+    let mut padded = [0u8; 64];
+    padded[..data.len()].copy_from_slice(data);
+    padded[data.len()] = 0x80;
+    let bit_len = (data.len() as u64) * 8;
+    padded[56..64].copy_from_slice(&bit_len.to_be_bytes());
+
+    let state = compress(&padded);
+    let mut out = [0u8; 32];
+    for i in 0..8 {
+        out[i * 4..i * 4 + 4].copy_from_slice(&state[i].to_be_bytes());
+    }
+    out
 }
 
 /// Shared 64-round compression over one already-padded 64-byte block.
 ///
-/// Returns `(a, b)` -- the first two working-variable words after the initial vector is
-/// added back in. Callers extract whatever subset of output bytes they need.
-fn compress(padded: &[u8; 64]) -> (u32, u32) {
+/// Returns the full 8-word working state after the initial vector is added back in
+/// (feedforward). Callers extract whatever subset of output words/bytes they need.
+fn compress(padded: &[u8; 64]) -> [u32; 8] {
     // ---- Parse into 16 big-endian u32 words (message schedule initial values) ----
     let mut w = [0u32; 64];
     for i in 0..16 {
@@ -140,10 +164,16 @@ fn compress(padded: &[u8; 64]) -> (u32, u32) {
     }
 
     // Add the initial vector back in (feedforward)
-    (
+    [
         a.wrapping_add(INITIAL_HASH_VALUES[0]),
         b.wrapping_add(INITIAL_HASH_VALUES[1]),
-    )
+        c.wrapping_add(INITIAL_HASH_VALUES[2]),
+        d.wrapping_add(INITIAL_HASH_VALUES[3]),
+        e.wrapping_add(INITIAL_HASH_VALUES[4]),
+        f.wrapping_add(INITIAL_HASH_VALUES[5]),
+        g.wrapping_add(INITIAL_HASH_VALUES[6]),
+        h.wrapping_add(INITIAL_HASH_VALUES[7]),
+    ]
 }
 
 #[cfg(test)]
@@ -161,6 +191,27 @@ mod tests {
         let (sid_lo, sid_hi) = hash_40(&buf);
         assert_eq!(sid_lo, 0x0B49EC2E, "sid_lo mismatch");
         assert_eq!(sid_hi, 0x35, "sid_hi mismatch");
+    }
+
+    /// `mikro_sha256_digest`'s first word must agree with `hash_40`'s `sid_lo` derivation
+    /// (both read the same underlying compression output, just via different accessors) --
+    /// a consistency check between the general digest function and the specialized one.
+    #[test]
+    fn test_mikro_sha256_digest_agrees_with_hash_40() {
+        let mut buf = [0x20u8; 40];
+        buf[..20].copy_from_slice(b"00000000000000000001");
+        buf[20..36].copy_from_slice(b"VMware Virtual I");
+        buf[36..40].copy_from_slice(&0x1800u32.to_le_bytes());
+
+        let (sid_lo, sid_hi) = hash_40(&buf);
+
+        // hash_40's padding for a 40-byte input (data + 0x80 + zeros + 8-byte bit-length
+        // 0x0140) is identical to what mikro_sha256_digest computes generically, so the two
+        // must produce the same digest for this input.
+        let digest = mikro_sha256_digest(&buf);
+        let digest_sid_lo = u32::from_le_bytes(digest[0..4].try_into().unwrap());
+        assert_eq!(digest_sid_lo, sid_lo);
+        assert_eq!(digest[4], sid_hi);
     }
 
     /// Verify hash_10's raw sha_val for the standard all-zero identity. Combined with

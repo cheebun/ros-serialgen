@@ -6,6 +6,8 @@ description = "RouterOS L6 Serial Generator & License Key Converter"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+curve25519-dalek = "4"
 
 [profile.release]
 opt-level = 3

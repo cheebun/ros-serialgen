@@ -170,7 +170,8 @@ fn entries_to_targets(entries: &[KeyEntry], mix: (u32, u32)) -> Vec<Target> {
     entries
         .iter()
         .map(|e| {
-            let tv = software_id::decode(&e.software_id).unwrap_or_else(|e| panic!("invalid SOFTWARE ID in config: {}", e));
+            let tv = software_id::decode(&e.software_id)
+                .unwrap_or_else(|e| panic!("invalid SOFTWARE ID in config: {}", e));
             Target {
                 name: e.software_id.clone(),
                 need_lo: (tv as u32) ^ mix_lo,
@@ -180,4 +181,3 @@ fn entries_to_targets(entries: &[KeyEntry], mix: (u32, u32)) -> Vec<Target> {
         })
         .collect()
 }
-

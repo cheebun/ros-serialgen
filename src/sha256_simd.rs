@@ -21,10 +21,7 @@ pub struct SimdResult {
 /// SIMD rotate-right helper macro: the imm8 shift amount must be a literal, not a generic parameter.
 macro_rules! rotr {
     ($x:expr, $n:literal) => {{
-        _mm512_or_si512(
-            _mm512_srli_epi32($x, $n),
-            _mm512_slli_epi32($x, 32 - $n),
-        )
+        _mm512_or_si512(_mm512_srli_epi32($x, $n), _mm512_slli_epi32($x, 32 - $n))
     }};
 }
 
@@ -32,20 +29,14 @@ macro_rules! rotr {
 #[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn big_sigma0(a: __m512i) -> __m512i {
-    _mm512_xor_si512(
-        _mm512_xor_si512(rotr!(a, 2), rotr!(a, 13)),
-        rotr!(a, 22),
-    )
+    _mm512_xor_si512(_mm512_xor_si512(rotr!(a, 2), rotr!(a, 13)), rotr!(a, 22))
 }
 
 /// SHA-256 Σ1(e) = ROTR(e,6) ⊕ ROTR(e,11) ⊕ ROTR(e,25)
 #[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn big_sigma1(e: __m512i) -> __m512i {
-    _mm512_xor_si512(
-        _mm512_xor_si512(rotr!(e, 6), rotr!(e, 11)),
-        rotr!(e, 25),
-    )
+    _mm512_xor_si512(_mm512_xor_si512(rotr!(e, 6), rotr!(e, 11)), rotr!(e, 25))
 }
 
 /// SHA-256 σ0(x) = ROTR(x,7) ⊕ ROTR(x,18) ⊕ (x >> 3)
@@ -89,10 +80,9 @@ unsafe fn maj(a: __m512i, b: __m512i, c: __m512i) -> __m512i {
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 unsafe fn bswap_mask_epi32() -> __m512i {
     _mm512_set_epi8(
-        12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
-        12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
-        12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
-        12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
+        12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11, 4, 5,
+        6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8,
+        9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
     )
 }
 
@@ -128,12 +118,7 @@ pub fn precompute_constant_words(model_bytes: &[u8; 16], sv_bytes: &[u8; 4]) -> 
     buf[16..20].copy_from_slice(sv_bytes);
     let mut words = [0u32; 5];
     for i in 0..5 {
-        words[i] = u32::from_be_bytes([
-            buf[i * 4],
-            buf[i * 4 + 1],
-            buf[i * 4 + 2],
-            buf[i * 4 + 3],
-        ]);
+        words[i] = u32::from_be_bytes([buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2], buf[i * 4 + 3]]);
     }
     words
 }
@@ -150,10 +135,7 @@ pub fn precompute_constant_words(model_bytes: &[u8; 16], sv_bytes: &[u8; 4]) -> 
 ///
 /// The caller must ensure the CPU supports AVX-512F + AVX-512BW.
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
-pub unsafe fn hash_40_x16(
-    inputs: &[[u8; 40]; 16],
-    const_w5_9: &[u32; 5],
-) -> SimdResult {
+pub unsafe fn hash_40_x16(inputs: &[[u8; 40]; 16], const_w5_9: &[u32; 5]) -> SimdResult {
     // Shared bswap mask (L5: hoisted for reuse)
     let bswap = bswap_mask_epi32();
 
@@ -163,8 +145,7 @@ pub unsafe fn hash_40_x16(
     // W[0..4]: serial portion, SIMD gather + byte-order conversion (H3)
     let base_ptr = inputs.as_ptr() as *const u8;
     let stride_indices = _mm512_setr_epi32(
-        0, 40, 80, 120, 160, 200, 240, 280,
-        320, 360, 400, 440, 480, 520, 560, 600,
+        0, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600,
     );
     for word_idx in 0..5 {
         let offset_vec = _mm512_set1_epi32((word_idx * 4) as i32);
@@ -290,9 +271,8 @@ mod tests {
             inputs[lane][20..36].copy_from_slice(model);
             inputs[lane][36..40].copy_from_slice(&sv.to_le_bytes());
 
-            let (lo, hi) = sha256_scalar::hash_40(
-                <&[u8; 40]>::try_from(&inputs[lane][..]).unwrap(),
-            );
+            let (lo, hi) =
+                sha256_scalar::hash_40(<&[u8; 40]>::try_from(&inputs[lane][..]).unwrap());
             expected_lo[lane] = lo;
             expected_hi[lane] = hi;
         }

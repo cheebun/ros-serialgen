@@ -4,20 +4,21 @@ Machine-executable rules for all AI tools working on this Rust project.
 
 ## Project
 
-`ros-serialgen` — RouterOS serial generator + key conversion CLI tool. Computes serials from an existing license via SOFTWARE ID collision search; custom model strings supported.
+`ros-serialgen` — RouterOS serial generator + key conversion CLI tool. Computes serials from an existing license (any level, L1-L6 -- the SOFTWARE ID computation and collision-search process don't depend on `nlevel`) via SOFTWARE ID collision search; custom model strings supported.
 
 ## Architecture
 
 ```
 src/
-├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + 43 tests
+├── main.rs              CLI entry (clap subcommands) + multi-threaded search logic + tests
 ├── sha256_constants.rs  Shared constants (ROUND_CONSTANTS + INITIAL_HASH_VALUES)
-├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
+├── sha256.rs            MikroTik custom SHA-256 (scalar, production) + arbitrary-length digest
 ├── sha256_scalar.rs     Scalar SHA-256 backup (#[cfg(test)], for cross-validation)
 ├── sha256_simd.rs       AVX-512 SIMD 16-way parallel SHA-256
 ├── software_id.rs       Base-35 encode/decode + sector_val rounding
 ├── targets.rs           Load collision targets from keys.toml
-└── convert.rs           signature_hex ↔ Key text conversion (MTBase64)
+├── convert.rs           signature_hex ↔ Key text conversion (MTBase64) + metadata decode
+└── curve25519.rs        EC-KCDSA local license verification (curve25519-dalek-based, §8.32)
 
 keys.toml                External key configuration (loaded at runtime, no recompile needed)
 ```
@@ -37,22 +38,26 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>]
   -i  Non-standard 20-hex-char MBR identity (0x100-0x109); default is the standard all-zero identity
 
 # Verify a serial
-ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>] [-i <identity_hex>]
+ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>] [-i <identity_hex>] [-l <license.key>]
+  -l  Compare a .key file's (or raw signature_hex file's) embedded SOFTWARE ID against the one computed above
 
-# Conversion
+# Conversion (also prints SOFTWARE-ID/VERSION/LEVEL/NONCE-HASH/SIGNATURE/LICENSE-VALID metadata to stderr)
 ros-serialgen sig2key <128-char-hex>     # signature → Key text
 ros-serialgen key2sig <file.key>         # Key text → signature
 
 # Algorithm self-check
 ros-serialgen verify
+
+# Shell completion (bash/zsh/fish/powershell/elvish)
+ros-serialgen completions <shell>
 ```
 
 ## Build
 
 ```bash
 RUSTFLAGS='-C target-cpu=native' cargo build --release   # AVX-512 optimal
-cargo test          # 58 unit tests
-cargo clippy        # zero warnings
+cargo test          # 66+ unit tests (grows with new features -- see `cargo test` output for the exact count)
+cargo clippy        # a handful of pre-existing lints (too-many-arguments on CLI-plumbing functions, etc.); no new categories from recent changes
 cargo fmt --check   # format check
 ```
 
@@ -97,10 +102,18 @@ Base-35 table: "TN0BYX18S5HZ4IA67DGF3LPCJQRUK9MW2VE"
 - `software_id::tests::test_decode_invalid_char` — invalid character error
 - `software_id::tests::test_round_sectors` — 5 rounding verification cases
 - `convert::tests::test_roundtrip_synthetic` — sig ↔ key conversion verification
-- `main::tests` — 43 tests covering disk size parsing/validation, write_serial, BCD, software_id, model, input_buf, check_match, E2E, identity parsing/mix resolution
+- `main::tests` — disk size parsing/validation, write_serial, BCD, software_id, model, input_buf, check_match, E2E, identity parsing/mix resolution
 - `targets::tests` — 3 tests covering `mix_from_identity` (matches standard for all-zero, deterministic, differs for non-zero)
+- `curve25519::tests` — EC-KCDSA verify against `TI09-7WK3`'s real, hardware-activation-confirmed
+  signature (must return `true`), plus rejection tests for a tampered signature/payload/wrong
+  public key (must return `false`) -- see `docs/license-internals.md` §8.32
 
 ## Dependencies
 
 - `clap` 4.x — CLI framework (derive mode)
-- Zero runtime dependencies (SHA-256 and MTBase64 are hand-implemented)
+- `clap_complete` 4.x — shell completion script generation (`completions` subcommand)
+- `curve25519-dalek` 4.x — audited Curve25519 field/point arithmetic for EC-KCDSA local license
+  verification (`LICENSE-VALID` output); see `docs/license-internals.md` §8.32 for why this one
+  isn't hand-implemented
+- SHA-256 and MTBase64 are hand-implemented (MikroTik-proprietary variants, no library
+  equivalent exists to depend on)

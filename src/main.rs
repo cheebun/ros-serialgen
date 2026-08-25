@@ -4,6 +4,7 @@
 //! auto-detected at runtime with fallback to the scalar implementation.
 
 mod convert;
+mod curve25519;
 mod sha256;
 mod sha256_constants;
 #[cfg(test)]
@@ -12,7 +13,9 @@ mod sha256_simd;
 mod software_id;
 mod targets;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -77,7 +80,13 @@ enum Commands {
         /// sata0/AHCI, which uses the identical encoding) or scsi (scsi0/virtio-scsi-pci
         /// specifically, NOT sata0 -- forces sector_val=0; see docs/license-internals.md
         /// §8.11-8.20; end-to-end activation confirmed on x86_64, §8.18).
-        #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
+        #[arg(
+            short = 'b',
+            long,
+            value_enum,
+            ignore_case = true,
+            default_value = "ide"
+        )]
         bus: BusType,
     },
     /// Convert signature_hex to Key text
@@ -85,10 +94,14 @@ enum Commands {
         /// 128-char hex string (64 bytes)
         signature_hex: String,
     },
-    /// Convert Key text file to signature_hex
+    /// Convert Key text to signature_hex -- accepts either a path to a .key file, or the
+    /// key text itself (any of the three forms `key_text_to_signature` accepts) as a literal
+    /// string argument
     Key2sig {
-        /// Path to .key file
-        key_file: String,
+        /// Path to a .key file, or the key text itself as a literal string (may start with
+        /// "-----BEGIN..."; allow_hyphen_values lets this be passed without a `--` separator)
+        #[arg(allow_hyphen_values = true)]
+        key_file_or_text: String,
     },
     /// Verify SOFTWARE ID computation with known test vectors
     Verify,
@@ -117,8 +130,23 @@ enum Commands {
         /// sata0/AHCI, which uses the identical encoding) or scsi (scsi0/virtio-scsi-pci
         /// specifically, NOT sata0 -- forces sector_val=0; see docs/license-internals.md
         /// §8.11-8.20; end-to-end activation confirmed on x86_64, §8.18).
-        #[arg(short = 'b', long, value_enum, ignore_case = true, default_value = "ide")]
+        #[arg(
+            short = 'b',
+            long,
+            value_enum,
+            ignore_case = true,
+            default_value = "ide"
+        )]
         bus: BusType,
+        /// Path to a .key license file (or a raw 128-char signature_hex file) to compare
+        /// against the SOFTWARE ID computed from serial/model/disk-size/identity/bus above.
+        #[arg(short = 'l', long)]
+        license: Option<String>,
+    },
+    /// Generate a shell completion script (bash/zsh/fish/powershell/elvish) and print it to stdout
+    Completions {
+        /// Target shell
+        shell: Shell,
     },
 }
 
@@ -292,7 +320,8 @@ fn is_valid_serial(s: &str) -> bool {
 
 /// Valid Model characters: `[0-9A-Za-z- ]` (including space)
 fn is_valid_model(s: &str) -> bool {
-    s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b' ')
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b' ')
 }
 
 /// Build the serial byte array (20 bytes)
@@ -305,7 +334,10 @@ fn build_serial_bytes(serial: &str) -> [u8; SERIAL_LEN] {
         eprintln!("Warning: serial '{}' contains invalid characters", serial);
     }
     if sb.len() > SERIAL_LEN {
-        eprintln!("Warning: serial '{}' truncated to {} bytes", serial, SERIAL_LEN);
+        eprintln!(
+            "Warning: serial '{}' truncated to {} bytes",
+            serial, SERIAL_LEN
+        );
     }
     let is_numeric = sb.iter().all(|b| b.is_ascii_digit());
     if is_numeric {
@@ -332,7 +364,10 @@ fn build_model_bytes(model: &str) -> [u8; MODEL_LEN] {
         eprintln!("Warning: model '{}' contains invalid characters", model);
     }
     if mb.len() > MODEL_LEN {
-        eprintln!("Warning: model '{}' truncated to {} bytes", model, MODEL_LEN);
+        eprintln!(
+            "Warning: model '{}' truncated to {} bytes",
+            model, MODEL_LEN
+        );
     }
     let copy_len = mb.len().min(MODEL_LEN);
     bytes[..copy_len].copy_from_slice(&mb[..copy_len]);
@@ -385,9 +420,11 @@ fn main() {
             from,
             identity,
             bus,
-        } => cmd_search(disk_size, unit, threads, model, keys, count, from, identity, bus),
+        } => cmd_search(
+            disk_size, unit, threads, model, keys, count, from, identity, bus,
+        ),
         Commands::Sig2key { signature_hex } => cmd_sig2key(&signature_hex),
-        Commands::Key2sig { key_file } => cmd_key2sig(&key_file),
+        Commands::Key2sig { key_file_or_text } => cmd_key2sig(&key_file_or_text),
         Commands::Verify => cmd_verify(),
         Commands::Check {
             serial,
@@ -397,7 +434,18 @@ fn main() {
             keys,
             identity,
             bus,
-        } => cmd_check(&serial, disk_size, unit, model, keys, identity, bus),
+            license,
+        } => cmd_check(
+            &serial, disk_size, unit, model, keys, identity, bus, license,
+        ),
+        Commands::Completions { shell } => {
+            generate(
+                shell,
+                &mut Cli::command(),
+                "ros-serialgen",
+                &mut io::stdout(),
+            );
+        }
     }
 }
 
@@ -430,7 +478,18 @@ fn cmd_search(
     let start_serial = from * 1_000_000;
 
     verify_6g(&raw_targets);
-    print_search_banner(&size_label, &model, sector_val, num_threads, &raw_targets, count, start_serial, use_simd, identity.as_deref(), bus);
+    print_search_banner(
+        &size_label,
+        &model,
+        sector_val,
+        num_threads,
+        &raw_targets,
+        count,
+        start_serial,
+        use_simd,
+        identity.as_deref(),
+        bus,
+    );
 
     let ctx = Arc::new(SearchContext {
         model_bytes: build_model_bytes(&model),
@@ -490,19 +549,29 @@ fn print_search_banner(
     let engine = if use_simd { "AVX-512 x16" } else { "scalar" };
 
     println!("=== RouterOS L6 Serial Generator ===");
-    println!("Disk: {}  Model: {}  SV: 0x{:X}", disk_label, model, sector_val);
+    println!(
+        "Disk: {}  Model: {}  SV: 0x{:X}",
+        disk_label, model, sector_val
+    );
     match bus {
-        BusType::Ide => println!("Bus: ide (verified against real hardware; also covers sata0/AHCI)"),
+        BusType::Ide => {
+            println!("Bus: ide (verified against real hardware; also covers sata0/AHCI)")
+        }
         BusType::Scsi => {
             println!("Bus: scsi (scsi0/virtio-scsi-pci only, NOT sata0; sector_val forced to 0)");
             println!("  WARNING: this encoding is validated against 7 real boot tests on a single");
-            println!("  1GiB ARM64 VM only (docs/license-internals.md §8.11-8.13). sector_val=0 has");
+            println!(
+                "  1GiB ARM64 VM only (docs/license-internals.md §8.11-8.13). sector_val=0 has"
+            );
             println!("  not been confirmed at other disk sizes -- verify any hit on real hardware");
             println!("  before relying on it.");
         }
     }
     match identity {
-        Some(hex) => println!("Identity: {} (custom, non-standard mix)", hex.to_uppercase()),
+        Some(hex) => println!(
+            "Identity: {} (custom, non-standard mix)",
+            hex.to_uppercase()
+        ),
         None => println!("Identity: 00000000000000000000 (standard, all-zero mix)"),
     }
     println!(
@@ -513,12 +582,19 @@ fn print_search_banner(
         engine
     );
     if start_serial > 0 {
-        println!("Start: {}M (serial {})", start_serial / 1_000_000, start_serial);
+        println!(
+            "Start: {}M (serial {})",
+            start_serial / 1_000_000,
+            start_serial
+        );
     }
     println!();
 
     for t in targets {
-        println!("  {} need_lo=0x{:08X} need_hi=0x{:02X}", t.name, t.need_lo, t.need_hi);
+        println!(
+            "  {} need_lo=0x{:08X} need_hi=0x{:02X}",
+            t.name, t.need_lo, t.need_hi
+        );
     }
     println!("\nSearching...\n");
 }
@@ -639,7 +715,10 @@ fn check_match(serial_num: u64, sid_lo: u32, sid_hi: u8, ctx: &SearchContext) {
             write_serial(&mut sbuf, serial_num);
             let serial_str = std::str::from_utf8(&sbuf).unwrap();
 
-            println!("FOUND [{}] serial={} target={} verified={}", n, serial_str, t.name, sid);
+            println!(
+                "FOUND [{}] serial={} target={} verified={}",
+                n, serial_str, t.name, sid
+            );
 
             if ctx.max_collisions > 0 && n >= ctx.max_collisions {
                 ctx.stop.store(true, Ordering::Relaxed);
@@ -659,40 +738,79 @@ fn report_progress(hashes: u64, start: &Instant, found_count: &AtomicUsize) {
 
 /// Convert a signature hex to License Key text
 fn cmd_sig2key(hex: &str) {
-    match convert::signature_to_key_text(hex) {
-        Ok(key) => println!("{}", key),
-        Err(e) => eprintln!("Error: {}", e),
-    }
     print_metadata(hex);
 }
 
-/// Convert a License Key file to signature hex
-fn cmd_key2sig(path: &str) {
-    match std::fs::read_to_string(path) {
-        Ok(content) => match convert::key_text_to_signature(&content) {
-            Ok(sig) => {
-                println!("{}", sig);
-                print_metadata(&sig);
+/// Convert Key text to signature hex. `input` is treated as a file path if it names an
+/// existing file; otherwise it's treated as the key text itself (any of the three forms
+/// `key_text_to_signature` accepts -- see `convert.rs`).
+fn cmd_key2sig(input: &str) {
+    let content = if std::path::Path::new(input).is_file() {
+        match std::fs::read_to_string(input) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Cannot read {}: {}", input, e);
+                return;
             }
-            Err(e) => eprintln!("Error: {}", e),
-        },
-        Err(e) => eprintln!("Cannot read {}: {}", path, e),
+        }
+    } else {
+        input.to_string()
+    };
+
+    match convert::key_text_to_signature(&content) {
+        Ok(sig) => print_metadata(&sig),
+        Err(e) => eprintln!("Error: {}", e),
     }
 }
 
-/// Print a signature's embedded SOFTWARE ID/version/level to stderr, so it doesn't pollute
-/// stdout for callers piping key text or signature hex directly to a file.
+/// Print a signature's full metadata to stdout: decoded fields, the raw MBR hex blob, and the
+/// equivalent `.key` file text -- everything derivable from a 64-byte signature, in one unified
+/// layout, regardless of whether the caller started from hex (`sig2key`) or a `.key` file
+/// (`key2sig`). Field labels/format match the reference `MTLic`-style parser output (see
+/// docs/license-internals.md §8.32).
+///
+/// `MBR Signature (hex)` is the full 64-byte blob (payload+nonce+signature) as written to MBR
+/// 0x110-0x14F -- distinct from the `Signature:` field above it, which is only the trailing
+/// 32-byte EC-KCDSA signature scalar (bytes 32..64 of this same blob).
 fn print_metadata(signature_hex: &str) {
     match convert::decode_metadata(signature_hex) {
         Ok(m) => {
-            eprintln!("SOFTWARE-ID: {}", m.software_id);
-            eprintln!("VERSION:     {} (unconfirmed field, see docs/license-internals.md)", m.version_byte);
-            eprintln!("LEVEL:       {}", m.level);
+            println!("  Software ID: {}", m.software_id);
+            println!("  Router OS Version: {}", m.version_byte);
+            println!("  License Level: {}", m.level);
+            println!("  Nonce Hash: {}", m.nonce_hash);
+            println!("  Signature: {}", m.signature);
+
+            let valid = match convert::decode_verify_inputs(signature_hex) {
+                Ok((payload, nonce_hash, signature)) => Some(curve25519::verify(
+                    &payload,
+                    &nonce_hash,
+                    &signature,
+                    &curve25519::LICENSE_PUBLIC_KEY,
+                )),
+                Err(_) => None,
+            };
+            match valid {
+                Some(v) => println!("  License valid: {}", v),
+                None => println!("  License valid: (could not run EC-KCDSA verification)"),
+            }
+
             if !m.padding_ok {
-                eprintln!("Warning: reserved bytes not all zero -- this may not be a valid signature");
+                eprintln!(
+                    "  Warning: reserved bytes not all zero -- this may not be a valid signature"
+                );
             }
         }
-        Err(e) => eprintln!("(could not decode SOFTWARE-ID/level metadata: {})", e),
+        Err(e) => eprintln!("(could not decode license metadata: {})", e),
+    }
+
+    println!("-----");
+    println!("  MBR Signature (hex): {}", signature_hex);
+
+    println!("-----");
+    match convert::signature_to_key_text(signature_hex) {
+        Ok(key_text) => println!("  License: {}", key_text),
+        Err(e) => eprintln!("Error: {}", e),
     }
 }
 
@@ -705,6 +823,7 @@ fn cmd_check(
     keys: Option<String>,
     identity: Option<String>,
     bus: BusType,
+    license: Option<String>,
 ) {
     validate_disk_size(disk_size, unit);
     let (total_bytes, size_label) = disk_size_bytes_and_label(disk_size, unit);
@@ -734,15 +853,33 @@ fn cmd_check(
         BusType::Ide => println!("Bus:    ide (verified against real hardware; also covers sata0/AHCI)"),
         BusType::Scsi => println!("Bus:    scsi (scsi0/virtio-scsi-pci only, NOT sata0; sector_val forced to 0 -- see docs/license-internals.md §8.11-8.20)"),
     }
-    println!("Identity: {}{}", identity_hex, if identity.is_some() { " (custom)" } else { " (standard)" });
+    println!(
+        "Identity: {}{}",
+        identity_hex,
+        if identity.is_some() {
+            " (custom)"
+        } else {
+            " (standard)"
+        }
+    );
     println!("SOFTWARE ID: {}", sid);
 
-    let matched = search_targets.iter().find(|t| sid_hi == t.need_hi && sid_lo == t.need_lo);
+    if let Some(path) = license.as_deref() {
+        compare_license_software_id(path, &sid);
+    }
+
+    let matched = search_targets
+        .iter()
+        .find(|t| sid_hi == t.need_hi && sid_lo == t.need_lo);
 
     if let Some(t) = matched {
         println!("\n✅ Matched signature: {}", t.name);
         if t.signature_hex.len() >= 128 {
-            println!("   Signature: {}...{}", &t.signature_hex[..16], &t.signature_hex[112..]);
+            println!(
+                "   Signature: {}...{}",
+                &t.signature_hex[..16],
+                &t.signature_hex[112..]
+            );
         } else {
             println!("   Signature: {}", t.signature_hex);
         }
@@ -759,13 +896,58 @@ fn cmd_check(
             identity_hex, t.signature_hex
         );
         if identity.is_some() {
-            println!("   NOTE: marker/reserved shown above (BDE800000000) are the standard values.");
+            println!(
+                "   NOTE: marker/reserved shown above (BDE800000000) are the standard values."
+            );
             println!("         If this identity came from a real device, use that device's own");
-            println!("         marker/reserved bytes instead -- see docs/license-internals.md §3.6.");
+            println!(
+                "         marker/reserved bytes instead -- see docs/license-internals.md §3.6."
+            );
         }
     } else {
         println!("\n❌ No match found");
         println!("   sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
+    }
+}
+
+/// Read a license file (either `.key` text or a raw 128-char signature_hex file), decode its
+/// embedded SOFTWARE ID, and compare it against the SOFTWARE ID computed from `check`'s
+/// serial/model/disk-size/identity/bus inputs.
+fn compare_license_software_id(path: &str, computed_sid: &str) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("\nError: cannot read license file {}: {}", path, e);
+            return;
+        }
+    };
+
+    let sig_hex = if content.contains("BEGIN MIKROTIK") {
+        match convert::key_text_to_signature(&content) {
+            Ok(sig) => sig,
+            Err(e) => {
+                eprintln!("\nError: cannot parse {} as a .key file: {}", path, e);
+                return;
+            }
+        }
+    } else {
+        content.trim().to_string()
+    };
+
+    match convert::decode_metadata(&sig_hex) {
+        Ok(m) => {
+            println!("\n=== License comparison ({}) ===", path);
+            println!("License SOFTWARE-ID: {}", m.software_id);
+            println!("Computed SOFTWARE-ID: {}", computed_sid);
+            if m.software_id == computed_sid {
+                println!(
+                    "✅ MATCH -- this license's SOFTWARE ID matches the given disk parameters"
+                );
+            } else {
+                println!("❌ NO MATCH -- this license was issued for a different SOFTWARE ID");
+            }
+        }
+        Err(e) => eprintln!("\nError: could not decode SOFTWARE-ID from {}: {}", path, e),
     }
 }
 
@@ -776,7 +958,11 @@ fn cmd_verify() {
         ("00000000000000000001", "VMware Virtual I", 0x1800u32),
         ("00000000202155543391", "ROS16G          ", 0x4000),
     ];
-    let engine = if sha256_simd::is_avx512_supported() { "AVX-512 x16" } else { "scalar" };
+    let engine = if sha256_simd::is_avx512_supported() {
+        "AVX-512 x16"
+    } else {
+        "scalar"
+    };
 
     println!("=== Verify (engine: {}) ===", engine);
     for (ser, model_str, sv) in &cases {
@@ -807,10 +993,16 @@ fn verify_6g(targets: &[targets::Target]) {
 
     let (sid_lo, sid_hi) = sha256::hash_40(&buf);
     if sid_lo != 0x0B49EC2E || sid_hi != 0x35 {
-        eprintln!("FATAL: SHA-256 self-check failed! sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
+        eprintln!(
+            "FATAL: SHA-256 self-check failed! sid_lo=0x{:08X} sid_hi=0x{:02X}",
+            sid_lo, sid_hi
+        );
         std::process::exit(1);
     }
-    if let Some(t) = targets.iter().find(|t| t.need_lo == sid_lo && t.need_hi == sid_hi) {
+    if let Some(t) = targets
+        .iter()
+        .find(|t| t.need_lo == sid_lo && t.need_hi == sid_hi)
+    {
         let _ = t; // hash matches a configured target; nothing further to check
     }
 }
@@ -850,7 +1042,11 @@ mod tests {
     fn test_sector_val_for_bus_scsi_is_always_zero() {
         // Confirmed via 7 real boot tests on a 1GiB ARM64 VM (docs §8.11-8.13) -- scsi mode
         // forces sector_val=0 regardless of disk size.
-        for total_bytes in [1 * 1024 * 1024 * 1024u64, 6 * 1024 * 1024 * 1024, 100 * 1024 * 1024 * 1024] {
+        for total_bytes in [
+            1 * 1024 * 1024 * 1024u64,
+            6 * 1024 * 1024 * 1024,
+            100 * 1024 * 1024 * 1024,
+        ] {
             assert_eq!(sector_val_for_bus(BusType::Scsi, total_bytes), 0);
         }
     }
@@ -873,8 +1069,14 @@ mod tests {
 
     #[test]
     fn test_disk_size_mb_256_512() {
-        assert_eq!(disk_size_bytes_and_label(256, SizeUnit::M).0, 256 * 1024 * 1024);
-        assert_eq!(disk_size_bytes_and_label(512, SizeUnit::M).0, 512 * 1024 * 1024);
+        assert_eq!(
+            disk_size_bytes_and_label(256, SizeUnit::M).0,
+            256 * 1024 * 1024
+        );
+        assert_eq!(
+            disk_size_bytes_and_label(512, SizeUnit::M).0,
+            512 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -1077,13 +1279,19 @@ mod tests {
     #[test]
     fn test_parse_identity_hex_exact_20() {
         let bytes = parse_identity_hex("0011223344556677AABB");
-        assert_eq!(bytes, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]);
+        assert_eq!(
+            bytes,
+            [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]
+        );
     }
 
     #[test]
     fn test_parse_identity_hex_lowercase() {
         let bytes = parse_identity_hex("0011223344556677aabb");
-        assert_eq!(bytes, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]);
+        assert_eq!(
+            bytes,
+            [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0xAA, 0xBB]
+        );
     }
 
     #[test]
@@ -1130,7 +1338,10 @@ mod tests {
 
         assert_eq!(buf.len(), INPUT_LEN);
         assert_eq!(&buf[..SERIAL_LEN], b"00000000000000000001");
-        assert_eq!(&buf[SERIAL_LEN..SERIAL_LEN + MODEL_LEN], b"VMware Virtual I");
+        assert_eq!(
+            &buf[SERIAL_LEN..SERIAL_LEN + MODEL_LEN],
+            b"VMware Virtual I"
+        );
         assert_eq!(&buf[SERIAL_LEN + MODEL_LEN..], &sv);
     }
 

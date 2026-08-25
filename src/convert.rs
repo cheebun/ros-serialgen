@@ -8,48 +8,49 @@ use crate::sha256_constants::ROUND_CONSTANTS;
 /// MTBase64 character table (same alphabet as standard Base64, but LSB-first bit order)
 const BASE64_TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// Convert a 64-byte signature (hex string) to Key text format
+const KEY_BEGIN_MARKER: &str = "-----BEGIN MIKROTIK SOFTWARE KEY------------";
+const KEY_END_MARKER: &str = "-----END MIKROTIK SOFTWARE KEY--------------";
+
+/// Convert a 64-byte signature (hex string) to Key text format. Single-line output (no
+/// newlines anywhere) -- `key_text_to_signature` locates the BEGIN/END markers by substring
+/// search rather than by line, so it accepts this format equally well whether embedded inline
+/// (e.g. after a "License: " label) or pasted as a standalone block.
 pub fn signature_to_key_text(signature_hex: &str) -> Result<String, String> {
     let sig_bytes = hex_decode(signature_hex)?;
     if sig_bytes.len() != 64 {
-        return Err(format!("signature must be 64 bytes, got {}", sig_bytes.len()));
+        return Err(format!(
+            "signature must be 64 bytes, got {}",
+            sig_bytes.len()
+        ));
     }
 
     let encoded = mt_base64_encode(&sig_bytes);
 
-    // Split into two lines (around the middle)
-    let mid = encoded.len() / 2;
-
-    Ok(format!(
-        "-----BEGIN MIKROTIK SOFTWARE KEY------------\n{}\n{}\n-----END MIKROTIK SOFTWARE KEY--------------",
-        &encoded[..mid],
-        &encoded[mid..]
-    ))
+    Ok(format!("{}{}{}", KEY_BEGIN_MARKER, encoded, KEY_END_MARKER))
 }
 
-/// Convert Key text to the hex string of a 64-byte signature
+/// Convert Key text to the hex string of a 64-byte signature. Accepts three input forms via one
+/// uniform normalization pipeline (strip all whitespace, then strip the BEGIN/END marker
+/// substrings if present -- whatever remains is the base64 payload):
+/// 1. Traditional multi-line `.key` file format (markers/data each on their own line, any indent)
+///    -- stripping whitespace collapses this to form 2.
+/// 2. Single-line, `signature_to_key_text`'s own output (markers directly abutting the data)
+///    -- stripping the marker substrings reduces this to form 3.
+/// 3. Bare MTBase64 data with no BEGIN/END markers at all.
 pub fn key_text_to_signature(key_text: &str) -> Result<String, String> {
-    // Extract the content between BEGIN/END
-    let lines: Vec<&str> = key_text.lines().collect();
-    let mut b64_data = String::new();
-
-    let mut in_key = false;
-    for line in &lines {
-        let trimmed = line.trim();
-        if trimmed.contains("BEGIN MIKROTIK") {
-            in_key = true;
-            continue;
-        }
-        if trimmed.contains("END MIKROTIK") {
-            break;
-        }
-        if in_key {
-            b64_data.push_str(trimmed);
-        }
-    }
+    // Strip markers *before* stripping whitespace: the marker constants contain their own
+    // internal single spaces ("BEGIN MIKROTIK SOFTWARE KEY"), so a whitespace-stripped-first
+    // input would no longer contain a literal match for them.
+    let without_markers = key_text
+        .replace(KEY_BEGIN_MARKER, "")
+        .replace(KEY_END_MARKER, "");
+    let b64_data: String = without_markers
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
 
     if b64_data.is_empty() {
-        return Err("no key data found between BEGIN/END markers".to_string());
+        return Err("no key data found".to_string());
     }
 
     let decoded = mt_base64_decode(&b64_data)?;
@@ -68,6 +69,10 @@ pub struct LicenseMetadata {
     /// Whether bytes 8..16 of the decrypted block are all zero, as expected for a well-formed
     /// signature. `false` means either this isn't a real signature or the decode is wrong.
     pub padding_ok: bool,
+    /// Signature bytes 16..32 -- the EC-KCDSA nonce hash. See docs/license-internals.md §8.32.
+    pub nonce_hash: String,
+    /// Signature bytes 32..64 -- the EC-KCDSA signature scalar. See docs/license-internals.md §8.32.
+    pub signature: String,
 }
 
 /// Decrypt the SOFTWARE ID / level metadata embedded in a signature's first 16 bytes.
@@ -76,23 +81,44 @@ pub struct LicenseMetadata {
 /// https://github.com/Ygnecz/MTLic): a signature's first 16 bytes, run through this transform,
 /// decode to `SOFTWARE_ID(6B LE) || reserved(1B) || level(1B) || zero-padding(8B)`.
 pub fn decode_metadata(signature_hex: &str) -> Result<LicenseMetadata, String> {
-    let sig_bytes = hex_decode(signature_hex)?;
-    if sig_bytes.len() != 64 {
-        return Err(format!("signature must be 64 bytes, got {}", sig_bytes.len()));
-    }
+    let (block, nonce_hash, signature) = decode_verify_inputs(signature_hex)?;
 
-    let mut block = [0u8; 16];
-    block.copy_from_slice(&sig_bytes[0..16]);
-    mt_transform(&mut block);
-
-    let software_id_val = u64::from_le_bytes(block[0..8].try_into().unwrap()) & 0x0000_FFFF_FFFF_FFFF;
+    let software_id_val =
+        u64::from_le_bytes(block[0..8].try_into().unwrap()) & 0x0000_FFFF_FFFF_FFFF;
 
     Ok(LicenseMetadata {
         software_id: crate::software_id::encode(software_id_val),
         version_byte: block[6],
         level: block[7],
         padding_ok: block[8..].iter().all(|&b| b == 0),
+        nonce_hash: hex_encode(&nonce_hash),
+        signature: hex_encode(&signature),
     })
+}
+
+/// (decoded payload block, nonce hash, signature scalar) -- see `decode_verify_inputs`.
+pub(crate) type VerifyInputs = ([u8; 16], [u8; 16], [u8; 32]);
+
+/// Split a 64-byte signature into its three EC-KCDSA-relevant parts: the `mt_transform`-
+/// decrypted 16-byte payload block (SOFTWARE-ID/version/level/reserved), the 16-byte nonce
+/// hash, and the 32-byte signature scalar. Shared by `decode_metadata` and
+/// `curve25519::verify`'s callers so the ARX-decode logic exists in exactly one place.
+pub(crate) fn decode_verify_inputs(signature_hex: &str) -> Result<VerifyInputs, String> {
+    let sig_bytes = hex_decode(signature_hex)?;
+    if sig_bytes.len() != 64 {
+        return Err(format!(
+            "signature must be 64 bytes, got {}",
+            sig_bytes.len()
+        ));
+    }
+
+    let mut block = [0u8; 16];
+    block.copy_from_slice(&sig_bytes[0..16]);
+    mt_transform(&mut block);
+
+    let nonce_hash: [u8; 16] = sig_bytes[16..32].try_into().unwrap();
+    let signature: [u8; 32] = sig_bytes[32..64].try_into().unwrap();
+    Ok((block, nonce_hash, signature))
 }
 
 /// MikroTik's proprietary ARX block cipher, called `MT_Transform` in the MTLic reference
@@ -153,9 +179,7 @@ fn mt_base64_encode(data: &[u8]) -> String {
     }
 
     if pending_bits != 0 {
-        encoded.push(
-            BASE64_TABLE[(data[data.len() - 1] >> (8 - pending_bits)) as usize] as char,
-        );
+        encoded.push(BASE64_TABLE[(data[data.len() - 1] >> (8 - pending_bits)) as usize] as char);
     }
 
     // Padding
@@ -168,10 +192,7 @@ fn mt_base64_encode(data: &[u8]) -> String {
 
 /// MikroTik Base64 decoding (LSB-first bit order)
 fn mt_base64_decode(data: &str) -> Result<Vec<u8>, String> {
-    let bytes: Vec<u8> = data
-        .bytes()
-        .filter(|&b| b != b'=')
-        .collect();
+    let bytes: Vec<u8> = data.bytes().filter(|&b| b != b'=').collect();
 
     let mut result = Vec::new();
     let mut pending_bits = 0u32;
@@ -227,7 +248,9 @@ mod tests {
     #[test]
     fn test_roundtrip_synthetic() {
         // Synthetic 64-byte signature; verify sig→key→sig round-trips exactly.
-        let sig: String = (0..64).map(|i| format!("{:02X}", (i * 7 + 3) as u8)).collect();
+        let sig: String = (0..64)
+            .map(|i| format!("{:02X}", (i * 7 + 3) as u8))
+            .collect();
 
         // sig → key
         let key = signature_to_key_text(&sig).unwrap();
@@ -237,6 +260,26 @@ mod tests {
         // key → sig
         let back = key_text_to_signature(&key).unwrap();
         assert_eq!(back, sig, "sig↔key roundtrip mismatch");
+    }
+
+    #[test]
+    fn test_key_text_three_input_forms_agree() {
+        // TI09-7WK3's known-good signature (see docs/license-internals.md §8.32), exercised
+        // through all three input forms `key_text_to_signature` must accept.
+        let sig = "E67A8F47AE86672FAE6D91DF19221453B34FE40E23F19E917107C449DDCB1D2061521816AD7730671B4CB226F1B0DB7448923C6297C49BDB3CCBF40AECBBCF0B";
+
+        // Form 1: single-line, this project's own signature_to_key_text output
+        let single_line = signature_to_key_text(sig).unwrap();
+        assert!(!single_line.contains('\n'), "expected single-line output");
+        assert_eq!(key_text_to_signature(&single_line).unwrap(), sig);
+
+        // Form 2: bare base64, no BEGIN/END markers at all
+        let bare_b64 = "mr3jH5qhn9irtF53ZICFTN7Tk7wIx7ZkxdAxJ19ydASYShhFteHMntBTyaS8wuNdIJJPidJxbuNPLTvCsv7zLA==";
+        assert_eq!(key_text_to_signature(bare_b64).unwrap(), sig);
+
+        // Form 3: traditional multi-line, indented `.key` file format
+        let multi_line = "  -----BEGIN MIKROTIK SOFTWARE KEY------------\n  mr3jH5qhn9irtF53ZICFTN7Tk7wIx7ZkxdAxJ19ydASY\n  ShhFteHMntBTyaS8wuNdIJJPidJxbuNPLTvCsv7zLA==\n  -----END MIKROTIK SOFTWARE KEY--------------";
+        assert_eq!(key_text_to_signature(multi_line).unwrap(), sig);
     }
 
     #[test]
