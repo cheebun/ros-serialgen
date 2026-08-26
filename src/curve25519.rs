@@ -3,13 +3,13 @@
 //!
 //! Curve: y^2 = x^3 + 486662*x^2 + x (Montgomery form) over GF(2^255-19). Verification
 //! algorithm and the public key constant below were confirmed via independent disassembly of
-//! `tools/bin/keyman_7.23.2` (x86) and `keyman_arm32` -- see docs/license-internals.md §8.32.
+//! `tools/bin/keyman_x86_7.23.2` (x86) and `keyman_arm32` -- see docs/license-internals.md §8.32.
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::montgomery::MontgomeryPoint;
 
 /// The `keyman` local-license-verification public key (X-coordinate only), independently
-/// confirmed present via disassembly in both `keyman_7.23.2` (x86) and `keyman_arm32` --
+/// confirmed present via disassembly in both `keyman_x86_7.23.2` (x86) and `keyman_arm32` --
 /// see docs/license-internals.md §8.32. NOT YET independently confirmed reachable from a
 /// local `.key`-file-import code path on ARM (only confirmed on x86) -- see §8.32's open item.
 pub const LICENSE_PUBLIC_KEY: [u8; 32] = [

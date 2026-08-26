@@ -845,6 +845,12 @@ fn cmd_check(
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| "00000000000000000000".to_string());
 
+    let marker = identity
+        .as_deref()
+        .map(|hex| targets::marker_from_identity(&parse_identity_hex(hex)))
+        .unwrap_or([0xBD, 0xE8]);
+    let marker_hex = format!("{:02X}{:02X}", marker[0], marker[1]);
+
     println!("=== Check ===");
     println!("Serial: {}", serial_display);
     println!("Model:  {}", model);
@@ -853,16 +859,11 @@ fn cmd_check(
         BusType::Ide => println!("Bus:    ide (verified against real hardware; also covers sata0/AHCI)"),
         BusType::Scsi => println!("Bus:    scsi (scsi0/virtio-scsi-pci only, NOT sata0; sector_val forced to 0 -- see docs/license-internals.md §8.11-8.20)"),
     }
-    println!(
-        "Identity: {}{}",
-        identity_hex,
-        if identity.is_some() {
-            " (custom)"
-        } else {
-            " (standard)"
-        }
-    );
-    println!("SOFTWARE ID: {}", sid);
+    println!("-----------");
+    println!("Identity: {}", identity_hex);
+    println!("Marker: {}", marker_hex);
+    println!("-----------");
+    println!("Software ID: {}", sid);
 
     if let Some(path) = license.as_deref() {
         compare_license_software_id(path, &sid);
@@ -892,18 +893,9 @@ fn cmd_check(
         }
 
         println!(
-            "\n   MBR HEX:\n   {}BDE800000000{}",
-            identity_hex, t.signature_hex
+            "\n   MBR HEX:\n   {}{}00000000{}",
+            identity_hex, marker_hex, t.signature_hex
         );
-        if identity.is_some() {
-            println!(
-                "   NOTE: marker/reserved shown above (BDE800000000) are the standard values."
-            );
-            println!("         If this identity came from a real device, use that device's own");
-            println!(
-                "         marker/reserved bytes instead -- see docs/license-internals.md §3.6."
-            );
-        }
     } else {
         println!("\n❌ No match found");
         println!("   sid_lo=0x{:08X} sid_hi=0x{:02X}", sid_lo, sid_hi);
