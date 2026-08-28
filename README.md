@@ -1,4 +1,4 @@
-# ros-serialgen — RouterOS Serial Generator & License Key Converter
+# MikroTik RouterOS Serial Collision Generator
 
 A CLI tool that computes a valid RouterOS serial number from an existing license. For any disk size, it searches for a collision serial whose SOFTWARE ID matches a known signature, so that the existing license activates without mass production. The technique and tool are not L6-specific -- any RouterOS license level (L1-L6) works the same way, since the SOFTWARE ID computation and collision-search process are identical regardless of `nlevel`. A custom disk model string can also be specified.
 
