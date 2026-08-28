@@ -74,7 +74,7 @@ Key experiments that validated (or disproved) assumptions about the RouterOS lic
 | `qm set --ide0` property-string | `model=VMware%20Virtual%20IDE%20Hard%20Drive` | Correct spaces (PVE decodes `%20` before building the QEMU arg) | TI09-7WK3 (correct) |
 | `qm set --ide0` property-string | `model="VMware Virtual IDE Hard Drive"` (shell-quoted) | Rejected: `invalid format - format error` | -- |
 
-**Conclusion**: The two paths handle spaces differently. `args:` is passed to QEMU as a raw command line, so `%20` is never decoded -- only shell single-quoting works there. `qm set --ide0` goes through PVE's own property-string parser, which decodes `%20` but rejects literal spaces or shell quotes outright. Since `qm set --ide0` is the simpler and now-standard attachment method (see [deployment-guide.md](deployment-guide.md#model-names-containing-spaces)), use `%20` encoding for models with spaces.
+**Conclusion**: The two paths handle spaces differently. `args:` is passed to QEMU as a raw command line, so `%20` is never decoded -- only shell single-quoting works there. `qm set --ide0` goes through PVE's own property-string parser, which decodes `%20` but rejects literal spaces or shell quotes outright. Since `qm set --ide0` is the simpler and now-standard attachment method (see [deployment-guide.md](../guides/x86-install.md#model-names-containing-spaces)), use `%20` encoding for models with spaces.
 
 ---
 

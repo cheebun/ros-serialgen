@@ -2,7 +2,7 @@
 
 Every `ros-serialgen` subcommand and flag, explained. Use this when you need to know exactly what a parameter does before running it.
 
-For PVE/QEMU deployment commands (`qm`, `qemu-img`, `qemu-nbd`, `dd`, `lvcreate`, etc.), see the inline explanations in [deployment-guide.md](deployment-guide.md).
+For PVE/QEMU deployment commands (`qm`, `qemu-img`, `qemu-nbd`, `dd`, `lvcreate`, etc.), see the inline explanations in [deployment-guide.md](../guides/x86-install.md).
 
 ---
 
@@ -22,8 +22,8 @@ ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
 | `-k <path>` | `--keys <path>` | Path to `keys.toml`. Defaults to `./keys.toml` if omitted. |
 | `-c <N>` | `--count <N>` | Number of collisions to find before stopping. `1` (default) stops at the first hit; `0` runs until interrupted (Ctrl+C), collecting every hit. |
 | `-f <N>` | `--from <N>` | Resume the search from N million hashes in, matching the `M` value printed in progress output. Defaults to `0` (start from the beginning). |
-| `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed (`0x100-0x109`), e.g. captured from a real device. Defaults to the standard all-zero identity used by collision search if omitted. See [license-internals.md](license-internals.md#36-marker-and-reserved-generated-from-identity-not-just-checked) for what this changes and why. |
-| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default, verified against real hardware -- covers both `ide0` and `sata0`/AHCI, which use the identical encoding, §8.20) or `scsi` (`scsi0`/`virtio-scsi-pci` specifically -- forces `sector_val=0`; does **not** apply to `sata0`). See [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) -- `scsi` mode's SOFTWARE ID computation and full end-to-end activation are both confirmed on x86_64 (§8.14, §8.18); on ARM64 a separate virtualization-detection issue can still prevent activation (§8.15-8.17). |
+| `-i <hex>` | `--identity <hex>` | Non-standard 20-hex-char MBR identity seed (`0x100-0x109`), e.g. captured from a real device. Defaults to the standard all-zero identity used by collision search if omitted. See [license-internals.md](../investigation/license-internals.md#36-marker-and-reserved-generated-from-identity-not-just-checked) for what this changes and why. |
+| `-b <bus>` | `--bus <bus>` | Disk bus type: `ide` (default, verified against real hardware -- covers both `ide0` and `sata0`/AHCI, which use the identical encoding, §8.20) or `scsi` (`scsi0`/`virtio-scsi-pci` specifically -- forces `sector_val=0`; does **not** apply to `sata0`). See [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) -- `scsi` mode's SOFTWARE ID computation and full end-to-end activation are both confirmed on x86_64 (§8.14, §8.18); on ARM64 a separate virtualization-detection issue can still prevent activation (§8.15-8.17). |
 
 ### Minimum disk size per unit
 
@@ -48,7 +48,7 @@ ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
 
 | Flag | Long form | Meaning |
 |---|---|---|
-| `--serial <value>` | -- | The 20-character serial number to verify. **Required.** No short form (`-s` is reserved for disk size). |
+| `--serial <value>` | -- | The serial number to verify. **Required.** No short form (`-s` is reserved for disk size). Pure-digit serials are left-padded with `0` to 20 characters automatically (`--serial 1` == `--serial 00000000000000000001`), so leading zeros can be omitted; alphanumeric serials are used as-is (right-padded with spaces internally, not zeros). |
 | `-s <N>` | `--disk-size <N>` | Disk size magnitude, paired with `-u`/`--unit`. **Required.** |
 | `-u <unit>` | `--unit <unit>` | Unit for `-s`: `g` (gigabytes, default), `m` (megabytes), `k` (kilobytes), or `b` (raw bytes). Same minimums as `search` above. |
 | `-m <name>` | `--model <name>` | Disk model string. Defaults to `ROS<N><unit>` if omitted. |
@@ -60,9 +60,9 @@ Prints the computed SOFTWARE ID, and if it matches a known signature, the Licens
 
 ## `ros-serialgen sig2key <signature_hex>`
 
-Positional argument: a 128-character hex string (64 bytes) -- the signature from the [Signature Table](collision-database.md#signature-table). Prints the corresponding `-----BEGIN MIKROTIK SOFTWARE KEY-----...` block to stdout.
+Positional argument: a 128-character hex string (64 bytes) -- the signature from the [Signature Table](../database/collision-database.md#signature-table). Prints the corresponding `-----BEGIN MIKROTIK SOFTWARE KEY-----...` block to stdout.
 
-Also prints `SOFTWARE-ID`/`VERSION`/`LEVEL` to **stderr** (so stdout stays exactly the key text, safe to redirect or copy/paste as-is) -- decrypted from the signature's first 16 bytes, confirming what SOFTWARE ID and license level this signature actually corresponds to. See [license-internals.md §8.21](license-internals.md#821-signature-metadata-decryption-mt_transform) for how this works.
+Also prints `SOFTWARE-ID`/`VERSION`/`LEVEL` to **stderr** (so stdout stays exactly the key text, safe to redirect or copy/paste as-is) -- decrypted from the signature's first 16 bytes, confirming what SOFTWARE ID and license level this signature actually corresponds to. See [license-internals.md §8.21](../investigation/license-internals.md#821-signature-metadata-decryption-mt_transform) for how this works.
 
 ## `ros-serialgen key2sig <key_file>`
 

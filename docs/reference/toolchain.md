@@ -133,4 +133,4 @@ The C tool has been superseded by ros-serialgen (Rust, AVX-512).
 | `.txt` vs `.key` import | Only `.key` extension is accepted |
 | MBR write vs key import | Both activate L6; key import is simpler |
 
-See [experiments.md](experiments.md) for full details.
+See [experiments.md](../investigation/experiments.md) for full details.

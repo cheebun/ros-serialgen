@@ -2,7 +2,7 @@
 
 Complete reference for creating, licensing, and troubleshooting a RouterOS x86 VM on Proxmox VE.
 
-For a streamlined walkthrough, see [quick-start.md](quick-start.md).
+For a streamlined walkthrough, see [quick-start.md](../quick-start.md).
 
 ---
 
@@ -10,7 +10,7 @@ For a streamlined walkthrough, see [quick-start.md](quick-start.md).
 
 - Proxmox VE 8.x or 9.x
 - RouterOS x86 ISO uploaded to PVE (Datacenter > Storage > ISO Images > Upload)
-- A collision entry for your disk size from the [collision table](collision-database.md)
+- A collision entry for your disk size from the [collision table](../database/collision-database.md)
 - SSH access to the PVE host
 
 > **Note**: Commands below use `100` as an example VM ID. Replace it with a VMID that is free on your PVE host -- check with `qm list` first.
@@ -63,13 +63,13 @@ PVE Web UI > Create VM:
 
 The disk size must match the collision table entry **exactly** (in bytes). The procedure differs by storage backend -- check which one you're using with `pvesm status`.
 
-**This project's collision database (§1-7, `docs/collision-database.md`) is verified against `ide0` -- and, confirmed identical, `sata0`.** `keyman` computes the SOFTWARE ID differently depending on how the disk is presented to the guest kernel: `ide0` and `sata0`/AHCI both use real ATA IDENTIFY data (`sata0`'s QEMU device is `ide-hd`, the same device model as `ide0`, just on an AHCI controller) and are therefore interchangeable for collision-search purposes -- an `ide0` table entry activates on a same-size `sata0` disk with no changes. `scsi0`/`virtio-scsi-pci` is the outlier: it uses SCSI INQUIRY + VPD page 0x80, a genuinely different encoding (see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). **A `serial=`/`model=` combo verified for `ide0`/`sata0` will not produce the same SOFTWARE ID on `scsi0`, and vice versa** -- use `ros-serialgen`'s `-b`/`--bus` flag (`ide` covers both `ide0` and `sata0`; `scsi` is `scsi0`-specific) matched to whichever bus you're targeting.
+**This project's collision database (§1-7, `docs/collision-database.md`) is verified against `ide0` -- and, confirmed identical, `sata0`.** `keyman` computes the SOFTWARE ID differently depending on how the disk is presented to the guest kernel: `ide0` and `sata0`/AHCI both use real ATA IDENTIFY data (`sata0`'s QEMU device is `ide-hd`, the same device model as `ide0`, just on an AHCI controller) and are therefore interchangeable for collision-search purposes -- an `ide0` table entry activates on a same-size `sata0` disk with no changes. `scsi0`/`virtio-scsi-pci` is the outlier: it uses SCSI INQUIRY + VPD page 0x80, a genuinely different encoding (see [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). **A `serial=`/`model=` combo verified for `ide0`/`sata0` will not produce the same SOFTWARE ID on `scsi0`, and vice versa** -- use `ros-serialgen`'s `-b`/`--bus` flag (`ide` covers both `ide0` and `sata0`; `scsi` is `scsi0`-specific) matched to whichever bus you're targeting.
 
 `--bus scsi` search results **have been confirmed activatable end-to-end** on x86_64 (`scsi0`/`virtio-scsi-pci`, fresh install, standard PVE-default `smbios1`, no special configuration needed -- §8.18). On ARM64 (`virt` machine type specifically), the same disk-bus difference additionally interacts with a separate QEMU/KVM-virtualization-detection code path in `keyman` that can prevent the MBR signature from validating even when the SOFTWARE ID is correct (§8.15-8.17, unresolved for that platform) -- if targeting ARM64 + `scsi0`, verify activation on real hardware before relying on it.
 
 ### Backend A: Directory Storage (e.g. `local`, qcow2 files)
 
-Example uses the 6G collision (`6442450944` bytes, model `ROS6G`); substitute the byte count for your disk size from the [collision table](collision-database.md).
+Example uses the 6G collision (`6442450944` bytes, model `ROS6G`); substitute the byte count for your disk size from the [collision table](../database/collision-database.md).
 
 ```bash
 # Remove any default disk
@@ -153,7 +153,7 @@ qm monitor 100
 4. Press `y` to confirm disk format
 5. After installation completes, **shut down the VM** -- do not reboot
 
-> **Critical**: The RouterOS installer overwrites MBR bytes `0x10A-0x10B` (sets them to `FF FF`). License data must be written **after** installation. See [experiments.md](experiments.md) Experiment 2 for details.
+> **Critical**: The RouterOS installer overwrites MBR bytes `0x10A-0x10B` (sets them to `FF FF`). License data must be written **after** installation. See [experiments.md](../investigation/experiments.md) Experiment 2 for details.
 
 ---
 
@@ -163,7 +163,7 @@ qm monitor 100
 
 Requires the VM to be shut down. Look up the signature for your SOFTWARE ID from the table below.
 
-Example uses the C7CU-PGT9 signature; substitute the row for your own SOFTWARE ID from the [Signature Table](collision-database.md#signature-table).
+Example uses the C7CU-PGT9 signature; substitute the row for your own SOFTWARE ID from the [Signature Table](../database/collision-database.md#signature-table).
 
 **Directory storage (qcow2)** -- mount via `qemu-nbd` first:
 
@@ -201,7 +201,7 @@ No shutdown required. The VM can be running after installation.
 
 **Generate the key text and prepare the HTTP server on the PVE host:**
 
-Generate the key text on demand from the signature hex in the [Signature Table](collision-database.md#signature-table) below:
+Generate the key text on demand from the signature hex in the [Signature Table](../database/collision-database.md#signature-table) below:
 
 ```bash
 ros-serialgen sig2key <signature-hex-from-table-above>
@@ -232,7 +232,7 @@ When prompted `Reboot? [y/N]:`, enter `y`.
 
 ### Method C: Console Direct Import
 
-Generate the key text from the signature hex in the [Signature Table](collision-database.md#signature-table) below, then paste it directly in the RouterOS console:
+Generate the key text from the signature hex in the [Signature Table](../database/collision-database.md#signature-table) below, then paste it directly in the RouterOS console:
 
 ```bash
 ros-serialgen sig2key <signature-hex-from-table-above>

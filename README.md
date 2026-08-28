@@ -5,7 +5,7 @@ A CLI tool that computes a valid RouterOS serial number from an existing license
 ## Features
 
 - **AVX-512 SIMD acceleration**: computes 16 SHA-256 hashes per batch (auto-detected at runtime, falls back to scalar when unsupported)
-- **Hand-implemented MikroTik crypto primitives**: SHA-256 and MTBase64 have no MikroTik-compatible library equivalent, so both are hand-implemented; standard Curve25519 EC-KCDSA verification uses the audited `curve25519-dalek` crate instead of hand-rolled field/point arithmetic (see `docs/license-internals.md` §8.32 for why)
+- **Hand-implemented MikroTik crypto primitives**: SHA-256 and MTBase64 have no MikroTik-compatible library equivalent, so both are hand-implemented; standard Curve25519 EC-KCDSA verification uses the audited `curve25519-dalek` crate instead of hand-rolled field/point arithmetic (see `docs/investigation/license-internals.md` §8.32 for why)
 - **External key configuration**: add new signatures via `keys.toml` without recompiling
 - **Resume search**: `--from` parameter resumes from a saved progress point
 - **Shell completion**: `completions` subcommand generates bash/zsh/fish/powershell/elvish scripts
@@ -166,18 +166,20 @@ cargo fmt --check   # format check
 - `clap` 4.x — CLI framework (derive mode)
 - `clap_complete` 4.x — shell completion script generation (`completions` subcommand)
 - `curve25519-dalek` 4.x — audited Curve25519 field/point arithmetic, used only for EC-KCDSA
-  local license verification (`LICENSE-VALID` output field); see `docs/license-internals.md`
+  local license verification (`LICENSE-VALID` output field); see `docs/investigation/license-internals.md`
   §8.32 for why this isn't hand-implemented like SHA-256/MTBase64
 - SHA-256 and MTBase64 are hand-implemented (MikroTik-proprietary variants with no library
   equivalent to depend on)
 
 ## Documentation
 
+See [docs/README.md](docs/README.md) for the full documentation index. Highlights:
+
 - [Quick Start](docs/quick-start.md) — deploy a licensed VM in 10 minutes
-- [Deployment Guide](docs/deployment-guide.md) — complete PVE setup reference
-- [Command Reference](docs/command-reference.md) — every ros-serialgen subcommand and flag explained
-- [Collision Database](docs/collision-database.md) — verified serial/model combinations
-- [Architecture](docs/architecture.md) — algorithm and security analysis
-- [License Internals](docs/license-internals.md) — SOFTWARE ID / MBR deep dive
-- [Experiments](docs/experiments.md) — verification experiment log
-- [Toolchain](docs/toolchain.md) — tools and reverse-engineering notes
+- [Deployment Guide](docs/guides/x86-install.md) — complete PVE setup reference
+- [Command Reference](docs/reference/command-reference.md) — every ros-serialgen subcommand and flag explained
+- [Collision Database](docs/database/collision-database.md) — verified serial/model combinations
+- [Architecture](docs/reference/architecture.md) — algorithm and security analysis
+- [License Internals](docs/investigation/license-internals.md) — SOFTWARE ID / MBR deep dive
+- [Experiments](docs/investigation/experiments.md) — verification experiment log
+- [Toolchain](docs/reference/toolchain.md) — tools and reverse-engineering notes

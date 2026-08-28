@@ -106,14 +106,14 @@ Base-35 table: "TN0BYX18S5HZ4IA67DGF3LPCJQRUK9MW2VE"
 - `targets::tests` — 3 tests covering `mix_from_identity` (matches standard for all-zero, deterministic, differs for non-zero)
 - `curve25519::tests` — EC-KCDSA verify against `TI09-7WK3`'s real, hardware-activation-confirmed
   signature (must return `true`), plus rejection tests for a tampered signature/payload/wrong
-  public key (must return `false`) -- see `docs/license-internals.md` §8.32
+  public key (must return `false`) -- see `docs/investigation/license-internals.md` §8.32
 
 ## Dependencies
 
 - `clap` 4.x — CLI framework (derive mode)
 - `clap_complete` 4.x — shell completion script generation (`completions` subcommand)
 - `curve25519-dalek` 4.x — audited Curve25519 field/point arithmetic for EC-KCDSA local license
-  verification (`LICENSE-VALID` output); see `docs/license-internals.md` §8.32 for why this one
+  verification (`LICENSE-VALID` output); see `docs/investigation/license-internals.md` §8.32 for why this one
   isn't hand-implemented
 - SHA-256 and MTBase64 are hand-implemented (MikroTik-proprietary variants, no library
   equivalent exists to depend on)

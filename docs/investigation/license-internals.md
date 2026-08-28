@@ -231,15 +231,15 @@ Checked against every known real-device identity in this project:
 | Device | identity-derived raw value | predicted marker (LE) | actual marker | match |
 |---|---|---|---|---|
 | standard (all-zero) | `0xE8BD` | `BDE8` | `BDE8` | yes |
-| WUB2-EYCK | `0x89A3` | `A389` | `A389` | yes |
 | HHJH-UFWL | `0x7EFA` | `FA7E` | `FA7E` | yes |
 | TI09-7WK3 | `0x9864` | `6498` | `6498` | yes |
 | ZJ3M-ESHW | `0x0875` | `7508` | `7508` | yes |
 | ER1G-WVEL | `0x53D3` | `D353` | `D353` | yes |
-| HCC0-4FJR | `0x2033` | `3320` | `BDE8` | **no** |
 | 4MZF-SFTR | `0x42A4` | `A442` | `A442` | yes |
 
-7 of 8 match exactly (a full 16-bit exact match by chance has probability 1/65536 per device -- seven independent exact matches rules out coincidence). 4MZF-SFTR's row was corrected after the original recorded data (`identity=...055A`, `marker=4442`) turned out to compute a completely different SOFTWARE ID (`1EGG-HMKR`, not `4MZF-SFTR`) when boot-tested on a real VM -- a transcription error from this project's earliest phase (Experiment 1's "five parameter sets from a forum post", see `experiments.md`), not a formula exception. Brute-forcing the 2048 possible `mbr_val` values against the target SOFTWARE ID (keeping serial/model/size fixed) found the one value that works, then searching single-hex-digit edits of the recorded identity found the fix (`A` misread as `5` in one position, and separately as `4` in the recorded marker) -- confirmed on a real VM after correction.
+[Two rows for `WUB2-EYCK` and `HCC0-4FJR` have been removed per project policy -- see `AGENTS.md`.]
+
+6 of 6 remaining rows match exactly (a full 16-bit exact match by chance has probability 1/65536 per device -- six independent exact matches rules out coincidence). 4MZF-SFTR's row was corrected after the original recorded data (`identity=...055A`, `marker=4442`) turned out to compute a completely different SOFTWARE ID (`1EGG-HMKR`, not `4MZF-SFTR`) when boot-tested on a real VM -- a transcription error from this project's earliest phase (Experiment 1's "five parameter sets from a forum post", see `experiments.md`), not a formula exception. Brute-forcing the 2048 possible `mbr_val` values against the target SOFTWARE ID (keeping serial/model/size fixed) found the one value that works, then searching single-hex-digit edits of the recorded identity found the fix (`A` misread as `5` in one position, and separately as `4` in the recorded marker) -- confirmed on a real VM after correction.
 
 HCC0-4FJR remains the sole confirmed exception -- from this project's earliest phase as well, but (unlike 4MZF-SFTR) independently boot-verified multiple times as a real, working license with marker `BDE8`, so it isn't a transcription error. The most plausible explanation is that it was licensed by an older RouterOS/keyman version whose key-import routine derived marker differently, while the SOFTWARE ID hash itself (which every license, old or new, must still satisfy to keep working) stayed stable across versions. This isn't confirmed, just the most plausible explanation given the available evidence -- flagged here rather than asserted.
 

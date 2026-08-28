@@ -61,17 +61,12 @@ Tested against every `identity` value currently on record in this project (`docs
 | Source | `identity` (hex) | Predicted `marker` | Recorded `marker` | Match |
 |---|---|---|---|---|
 | Standard (all-zero) convention | `00000000000000000000` | `BDE8` | `BDE8` | ✅ |
-| `WUB2-EYCK` real device | `13053023E906092F2175` | `A389` | `A389` | ✅ -- **also confirmed by a live activation**: writing the full 80-byte block (this `identity` + this `marker` + the real signature) onto a fresh RouterOS 7.23.2 install (PVE VM 303, `ide0`, `serial=013308089622`, `model=WlanCN Disk QQ:2911911`, size `4027084800`) produced `/system license print` -> `software-id: WUB2-EYCK`, `nlevel: 6`, no `expires-in` -- full permanent activation. |
 | `ER1G-WVEL` real device | `3836311F7DD5092F2175` | `D353` | `D353` | ✅ |
 | `ZJ3M-ESHW` real device | `32836785814746803233` | `7508` | `7508` | ✅ |
-| `HCC0-4FJR` real device | `75437493726136326185` | `3320` | `BDE8` (doc) / **`3320`** (real) | ✅ (see below) |
 
-**All 5 of 5** independent, real-world `identity` values reproduce their `marker` **exactly**, byte for byte. Two cases are cross-checked by an actual, successful, permanent real-hardware-equivalent activation in this session (not just a formula match):
+[Two additional real-device rows for `WUB2-EYCK` and `HCC0-4FJR` have been removed per project policy -- see `AGENTS.md`.]
 
-- `WUB2-EYCK`: fresh RouterOS 7.23.2 install, PVE VM 303, `ide0`, `serial=013308089622`, `model=WlanCN Disk QQ:2911911`, size `4027084800` -- full 80-byte MBR (`identity` + predicted `marker=A389` + signature) written -> `/system license print` -> `software-id: WUB2-EYCK`, `nlevel: 6`.
-- `HCC0-4FJR`: fresh RouterOS 7.23.2 install, PVE VM 304, `ide0`, `serial=SZHYPO1611140212411`, `model=SSD16G`, size `15905849344` -- full 80-byte MBR written with the *formula-predicted* `marker=3320` (**not** the `BDE8` recorded in `docs/mbr-data.md`) -> `/system license print` -> `software-id: HCC0-4FJR`, `nlevel: 6`. This activation proves two things at once: (a) `marker` is a real, load-bearing input `keyman` actually reads (not decorative) -- `WUB2-EYCK` had already shown a *wrong* marker breaks activation even with the correct `identity`+signature, and this test shows a *formula-predicted, non-recorded* marker successfully activates; (b) `mbr-data.md`'s `HCC0-4FJR` entry had an incorrect `marker` field (`BDE8`, presumably copied from this project's own standard-identity convention rather than independently captured from the real device) -- corrected there to `3320`.
-
-Five independent exact formula matches (four by direct comparison, one confirmed the opposite way -- by real activation overriding a documented-but-wrong value) rules out coincidence entirely.
+**All 3 of 3** remaining independent, real-world `identity` values reproduce their `marker` **exactly**, byte for byte, ruling out coincidence.
 
 ## Reverse direction: many identities share one marker, and they're interchangeable
 

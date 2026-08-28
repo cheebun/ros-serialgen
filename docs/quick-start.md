@@ -16,7 +16,7 @@ Deploy a licensed RouterOS L6 virtual machine on Proxmox VE using a pre-computed
 
 ## Step 1: Look Up a Collision
 
-Pick your disk size from the table below. For sizes not listed, see the [full collision table](collision-database.md).
+Pick your disk size from the table below. For sizes not listed, see the [full collision table](database/collision-database.md).
 
 | Disk Size | Bytes | Serial | Model | SOFTWARE ID |
 |---|---|---|---|---|
@@ -35,7 +35,7 @@ Pick your disk size from the table below. For sizes not listed, see the [full co
 
 All entries above use space-free model names, so no `%20` encoding is needed.
 
-For unlisted sizes, search for a new collision (see [command-reference.md](command-reference.md) for what each flag does; sub-1GB sizes are supported via `-u m/k/b`, minimum 64MB):
+For unlisted sizes, search for a new collision (see [command-reference.md](reference/command-reference.md) for what each flag does; sub-1GB sizes are supported via `-u m/k/b`, minimum 64MB):
 
 ```bash
 ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
@@ -80,7 +80,7 @@ Attach with serial and model:
 qm set 100 --ide0 local:100/vm-100-disk-1.qcow2,model=ROS6G,serial=00000000401012206606
 ```
 
-> If your model contains spaces (e.g. `VMware Virtual IDE Hard Drive`), URL-encode them as `%20` -- see [deployment-guide.md](deployment-guide.md#model-names-containing-spaces).
+> If your model contains spaces (e.g. `VMware Virtual IDE Hard Drive`), URL-encode them as `%20` -- see [deployment-guide.md](guides/x86-install.md#model-names-containing-spaces).
 
 ---
 
@@ -95,7 +95,7 @@ qm set 100 --ide0 local:100/vm-100-disk-1.qcow2,model=ROS6G,serial=0000000040101
 
 ## Step 5: Write MBR License
 
-Look up the signature for your SOFTWARE ID in the [Signature Table](collision-database.md#signature-table). Example below uses the C7CU-PGT9 signature, matching the 6G collision used throughout this walkthrough; substitute your own row.
+Look up the signature for your SOFTWARE ID in the [Signature Table](database/collision-database.md#signature-table). Example below uses the C7CU-PGT9 signature, matching the 6G collision used throughout this walkthrough; substitute your own row.
 
 ```bash
 modprobe nbd max_part=8
@@ -142,7 +142,7 @@ Expected output:
 
 Instead of writing the MBR offline, you can import a key file while RouterOS is running. No shutdown required after installation.
 
-Generate the key text from the signature hex for your SOFTWARE ID (see the [Signature Table](collision-database.md#signature-table)):
+Generate the key text from the signature hex for your SOFTWARE ID (see the [Signature Table](database/collision-database.md#signature-table)):
 
 ```bash
 ros-serialgen sig2key <signature-hex-from-table>
@@ -171,4 +171,4 @@ Enter `y` when prompted to reboot.
 
 > The file **must** have the `.key` extension. `.txt` will fail silently.
 
-See [deployment-guide.md](deployment-guide.md) for the full signature table and detailed import instructions.
+See [deployment-guide.md](guides/x86-install.md) for the full signature table and detailed import instructions.

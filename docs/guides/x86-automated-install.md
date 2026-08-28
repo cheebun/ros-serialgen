@@ -1,8 +1,6 @@
 # Automated RouterOS Installation via `qm sendkey`
 
-Drive the RouterOS installer non-interactively from the PVE host shell, with no VNC/console viewer needed. Useful for scripting VM creation end-to-end (e.g. verifying a new collision entry).
-
-For manual (console-driven) installation, see [deployment-guide.md](deployment-guide.md).
+Drive the RouterOS installer non-interactively from the PVE host shell, with no VNC/console viewer needed. **Primarily written for AI agents** (or any script/session with only shell/SSH access and no way to see a console screen) driving VM creation end-to-end — e.g. verifying a new collision entry without a human at a console. For manual, console-driven installation by a human, see [x86-install.md](x86-install.md) instead.
 
 ---
 
@@ -25,7 +23,7 @@ For manual (console-driven) installation, see [deployment-guide.md](deployment-g
 
 ## Full sequence
 
-Assumes the VM was created and booted with the ISO attached (`--ide2 local:iso/<file>,media=cdrom --boot order=ide2`) per [deployment-guide.md](deployment-guide.md).
+Assumes the VM was created and booted with the ISO attached (`--ide2 local:iso/<file>,media=cdrom --boot order=ide2`) per [deployment-guide.md](x86-install.md).
 
 ```bash
 VMID=302
@@ -80,7 +78,7 @@ qm start ${VMID}
 
 Everything above works identically for a `scsi0`-attached disk -- the installer's `sendkey` sequence doesn't care about disk bus type. Differences vs. the `ide0` examples above:
 
-- Use `ros-serialgen search`/`check -b scsi` to get a `serial=`/`product=` combo (not `-model=`/`-serial=` from an `ide0` search -- see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) for why they're not interchangeable).
+- Use `ros-serialgen search`/`check -b scsi` to get a `serial=`/`product=` combo (not `-model=`/`-serial=` from an `ide0` search -- see [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation) for why they're not interchangeable).
 - VM config: `--scsihw virtio-scsi-pci`, `--scsi0 local:<vmid>/vm-<vmid>-disk-1.qcow2,serial=<serial>,size=<any size>` (disk size is irrelevant on `scsi0` -- `sector_val` is always `0` regardless of actual disk size, confirmed at both 1GiB and 2GiB), plus `--args '-set device.scsi0.product=<product>'` (no `vendor=` override needed -- it was confirmed to never participate in the hash computation).
 - The MBR write step (below) is unchanged -- same offset (`0x100`), same header format, same signature encoding, regardless of bus type.
 - Confirmed to fully activate (`nlevel: 6`, no `expires-in`) end-to-end on x86_64 with a fresh install and standard PVE-default `smbios1` -- no special SMBIOS configuration required.
@@ -106,7 +104,7 @@ qemu-nbd --disconnect /dev/nbd0
 qm start ${VMID}
 ```
 
-See [command-reference.md](command-reference.md) for what each part of the `dd` command does.
+See [command-reference.md](../reference/command-reference.md) for what each part of the `dd` command does.
 
 To confirm activation, either check the console visually (`/system license print`, expect `nlevel: 6`), or -- if network is configured -- watch for the VM's MAC address to appear in the PVE host's neighbor table once it's reachable:
 
@@ -118,7 +116,7 @@ ip neigh show | grep -i <vm-mac-address>
 
 ## Lesson: real hardware disk sizes are not always round GB values
 
-When registering a collision entry that came from a real physical disk (not a `ROS<N>G` virtual disk created for collision search), the **actual byte count matters**, not the nominal advertised size. Several existing entries in [collision-database.md](collision-database.md) already reflect this:
+When registering a collision entry that came from a real physical disk (not a `ROS<N>G` virtual disk created for collision search), the **actual byte count matters**, not the nominal advertised size. Several existing entries in [collision-database.md](../database/collision-database.md) already reflect this:
 
 | Model | Nominal | Actual bytes |
 |---|---|---|
@@ -137,7 +135,7 @@ This project's own collision search always assumes a fixed, all-zero MBR identit
 
 **This does not hold for signatures extracted from a real physical device.** A real device's MBR identity bytes are whatever it shipped with -- not all-zero -- so its `mbr_val` (and therefore its mix) is different from the collision-search convention. The device's serial + model + disk size were only ever hashed against *that* device's own mix to produce its SOFTWARE ID.
 
-This is not a new discovery -- it's exactly what [experiments.md](experiments.md) Experiment 3 already documented from the earliest phase of this project: an original device's non-standard identity bytes stop matching the moment they're zeroed out. It's easy to lose sight of this once `ros-serialgen search` -- which always assumes the fixed all-zero convention -- becomes the primary daily workflow.
+This is not a new discovery -- it's exactly what [experiments.md](../investigation/experiments.md) Experiment 3 already documented from the earliest phase of this project: an original device's non-standard identity bytes stop matching the moment they're zeroed out. It's easy to lose sight of this once `ros-serialgen search` -- which always assumes the fixed all-zero convention -- becomes the primary daily workflow.
 
 Writing the *real* signature with the *standard* all-zero header, using that same serial/model/size, computes a **different** SOFTWARE ID than the one the signature was issued for -- the license import will appear to succeed (SOFTWARE ID and signature both look well-formed) but RouterOS falls back to a 24-hour trial (`expires-in` present, no permanent `nlevel: 6`), because the signature doesn't cryptographically validate for the SOFTWARE ID your disk actually computed.
 

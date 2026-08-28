@@ -2,7 +2,7 @@
 
 Complete database of verified SOFTWARE ID collisions for RouterOS L6 licensing on PVE x86 VMs.
 
-For deployment instructions, see [quick-start.md](quick-start.md) or [deployment-guide.md](deployment-guide.md).
+For deployment instructions, see [quick-start.md](../quick-start.md) or [deployment-guide.md](../guides/x86-install.md).
 
 ---
 
@@ -10,7 +10,7 @@ For deployment instructions, see [quick-start.md](quick-start.md) or [deployment
 
 Ten valid signatures have been recovered. Each signature is valid for any disk that produces the corresponding SOFTWARE ID.
 
-**Bus type:** every entry in this database (§1-2) was collision-searched and verified against `ide0`-attached disks, and applies **directly and unmodified to `sata0`/AHCI disks of the same size** -- `sata0` uses the identical encoding as `ide0` (both are QEMU's `ide-hd` device model), confirmed algorithmically and by re-verifying `TI09-7WK3` (`serial=00000000251582663387`, `model=SSD1G`, 1GiB) fresh on a `sata0` disk: `/system license print` -> `software-id: TI09-7WK3`, `nlevel: 6`. See [license-internals.md §8.20](license-internals.md#820-sata0-is-not-like-scsi0----it-uses-the-exact-same-encoding-as-ide0) for the full writeup. This does **not** extend to `scsi0`/`virtio-scsi-pci`, which uses a different encoding (`sector_val` forced to `0`) -- see §3 below.
+**Bus type:** every entry in this database (§1-2) was collision-searched and verified against `ide0`-attached disks, and applies **directly and unmodified to `sata0`/AHCI disks of the same size** -- `sata0` uses the identical encoding as `ide0` (both are QEMU's `ide-hd` device model), confirmed algorithmically and by re-verifying `TI09-7WK3` (`serial=00000000251582663387`, `model=SSD1G`, 1GiB) fresh on a `sata0` disk: `/system license print` -> `software-id: TI09-7WK3`, `nlevel: 6`. See [license-internals.md §8.20](../investigation/license-internals.md#820-sata0-is-not-like-scsi0----it-uses-the-exact-same-encoding-as-ide0) for the full writeup. This does **not** extend to `scsi0`/`virtio-scsi-pci`, which uses a different encoding (`sector_val` forced to `0`) -- see §3 below.
 
 ### Signature Table
 
@@ -21,8 +21,6 @@ Ten valid signatures have been recovered. Each signature is valid for any disk t
 | HHJH-UFWL | `B08F6DA0CE6D8A13357403F0146B1DD227C5DEBFBD1B8260BE38DB0016D8B0BD110B34457997C8AC956FB7551081C1CB8DA79C0E6160A8DFE79F6FC38E543905` |
 | C7CU-PGT9 | `F4E11772DEEAED8AF43668DA5EBDAD0846B694FFE9E77EFAE77E11A6049E4303B0B09DCEF8D9A647D643D1BAD4AF13B9659CCB11A06D3A9080096634E4E88B07` |
 | ZJ3M-ESHW | `E789138FE2AD5DF78DA962BD6810DF9D68C580F937F33B1CD409402CCD956EFD38825E198A1C4F7D82216CC99142BC0F8960835E6742225E2DCD6A45AA561806` |
-| WUB2-EYCK | `2D4525F4664DC956CC67DD92ACDA8EEB19D9A2AA16F744EB9DE66C5E6B44B0FA37E50CAF652E1306495B1A9DEEB0A603B6128618DB6392675B612371BEB7590F` |
-| HCC0-4FJR | `C333B3013346CB7ACB03A5809FC6899D54FABD910C0FE9C4B874624D164A1EEE61D230405FB47CC6A45175ED0158D7742E34F50D1E8F574A083AFB214CE43B07` |
 | G353-EXPG | `993D2B07CBF4A90DE4B6AFEFDEC54C03BF4BFB11DB52C232E0675A5DB3F67FB7D575950718A9AC4A6C2C1C986E9B2A1F3884AEF07805A2FDFAA6A3B1B0AC9C09` |
 | VI8Q-E90F | `FAF308BA3FFD4185308A8784244749EFFE7E4E65C14C01CD55D946506B47F636757F62106D114329104012DE7B44543F3444F0E724080873E3A20E11F5EF450E` |
 
@@ -99,7 +97,7 @@ Source: [issue #1](https://github.com/cheebun/ros-serialgen/issues/1) (MurVlad).
 
 Choose your desired disk size. Note the **Serial**, **Model**, and **SOFTWARE ID**, then follow the deployment guide.
 
-To search for a new disk size (see [command-reference.md](command-reference.md) for the `-u` unit flag; sub-1GB sizes down to 64MB are supported via `-u m/k/b`):
+To search for a new disk size (see [command-reference.md](../reference/command-reference.md) for the `-u` unit flag; sub-1GB sizes down to 64MB are supported via `-u m/k/b`):
 
 ```bash
 ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
@@ -238,7 +236,6 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 
 | Actual Size (bytes) | Model | Serial | SOFTWARE ID | Verified |
 |---|---|---|---|---|
-| 6,442,450,944 | `VMware Virtual IDE Hard Drive` | `00000000000000000001` | TI09-7WK3 | Y |
 | 6,442,450,944 | `ROS6G` | `00000000401012206606` | C7CU-PGT9 | Y |
 | 6,442,450,944 | `ROS6G` | `00000000931789296514` | HHJH-UFWL | Y |
 | 6,442,450,944 | `ROS6G` | `00000001731995041625` | C7CU-PGT9 | Y |
@@ -554,7 +551,7 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 
 ## 3. `scsi0`/`virtio-scsi-pci` Results
 
-Everything above is verified for `ide0` only -- `keyman` computes the SOFTWARE ID differently for SCSI-presented disks (see [license-internals.md §8](license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). Use `ros-serialgen search -b scsi` to search specifically for this bus type; results below are **not** interchangeable with the `ide0` table.
+Everything above is verified for `ide0` only -- `keyman` computes the SOFTWARE ID differently for SCSI-presented disks (see [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). Use `ros-serialgen search -b scsi` to search specifically for this bus type; results below are **not** interchangeable with the `ide0` table.
 
 **Unlike `ide0`, disk size does not matter for `scsi0`** -- `sector_val` is always `0` on this path regardless of the disk's actual byte count (confirmed at both 1GiB and 2GiB, §8.19), so a single `serial=`/`product=` combo below activates on a `scsi0` disk of *any* size. No size-specific table needed.
 
