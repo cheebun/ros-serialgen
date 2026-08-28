@@ -4,7 +4,7 @@ This directory is organized by what you're trying to do, not by when a page was 
 
 ## Start here
 
-- **[quick-start.md](quick-start.md)** — deploy a licensed L6 RouterOS VM in 10 minutes using a pre-computed collision.
+- **[quick-start.md](quick-start.md)** — deploy a licensed RouterOS VM in 10 minutes using a pre-computed collision.
 
 ## guides/ — step-by-step walkthroughs
 

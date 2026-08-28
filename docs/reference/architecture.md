@@ -1,4 +1,4 @@
-# RouterOS L6 Licensing Mechanism -- Technical Analysis
+# RouterOS Licensing Mechanism -- Technical Analysis
 
 Analysis of the RouterOS x86 licensing system based on reverse engineering of the keyman binary (RouterOS 7.23.2) and verification on PVE hardware.
 

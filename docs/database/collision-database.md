@@ -1,6 +1,6 @@
 # Collision Results Database
 
-Complete database of verified SOFTWARE ID collisions for RouterOS L6 licensing on PVE x86 VMs.
+Complete database of verified SOFTWARE ID collisions for RouterOS licensing on PVE x86 VMs. The technique works identically for any license level (L1-L6) -- the SOFTWARE ID computation and collision search don't depend on `nlevel`. Entries below happen to be L6 signatures (this project's original focus), but nothing here is L6-specific.
 
 For deployment instructions, see [quick-start.md](../quick-start.md) or [deployment-guide.md](../guides/x86-install.md).
 
@@ -100,7 +100,7 @@ Choose your desired disk size. Note the **Serial**, **Model**, and **SOFTWARE ID
 To search for a new disk size (see [command-reference.md](../reference/command-reference.md) for the `-u` unit flag; sub-1GB sizes down to 64MB are supported via `-u m/k/b`):
 
 ```bash
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
+ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> --count 0 --keys keys.toml
 ```
 
 ### 128M
@@ -551,7 +551,7 @@ ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
 
 ## 3. `scsi0`/`virtio-scsi-pci` Results
 
-Everything above is verified for `ide0` only -- `keyman` computes the SOFTWARE ID differently for SCSI-presented disks (see [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). Use `ros-serialgen search -b scsi` to search specifically for this bus type; results below are **not** interchangeable with the `ide0` table.
+Everything above is verified for `ide0` only -- `keyman` computes the SOFTWARE ID differently for SCSI-presented disks (see [license-internals.md §8](../investigation/license-internals.md#8-arm32-keyman-on-virtio-scsi-a-platform-specific-investigation)). Use `ros-serialgen search --bus scsi` to search specifically for this bus type; results below are **not** interchangeable with the `ide0` table.
 
 **Unlike `ide0`, disk size does not matter for `scsi0`** -- `sector_val` is always `0` on this path regardless of the disk's actual byte count (confirmed at both 1GiB and 2GiB, §8.19), so a single `serial=`/`product=` combo below activates on a `scsi0` disk of *any* size. No size-specific table needed.
 

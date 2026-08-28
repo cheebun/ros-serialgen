@@ -124,19 +124,27 @@ More keys = faster search (linear speedup).
 
 ```
 ├── Cargo.toml
-├── keys.toml                External key configuration
+├── keys.toml                External key configuration (gitignored)
+├── keys.example.toml        Template with placeholder entry
 ├── README.md
 ├── CLAUDE.md / AGENTS.md    AI tool instructions
-└── src/
-    ├── main.rs              CLI entry + multi-threaded search engine + unit tests
-    ├── sha256_constants.rs  MikroTik SHA-256 shared constants (IV + K)
-    ├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
-    ├── sha256_simd.rs       AVX-512 SIMD 16-way parallel SHA-256
-    ├── sha256_scalar.rs     Scalar SHA-256 backup (for test cross-validation)
-    ├── software_id.rs       Base-35 encode/decode + sector_val rounding
-    ├── targets.rs           Load collision targets from keys.toml
-    ├── convert.rs           signature_hex ↔ Key text conversion (MTBase64) + metadata decode
-    └── curve25519.rs        EC-KCDSA local license verification (curve25519-dalek-based)
+├── src/
+│   ├── main.rs              CLI entry + multi-threaded search engine + unit tests
+│   ├── sha256_constants.rs  MikroTik SHA-256 shared constants (IV + K)
+│   ├── sha256.rs            MikroTik custom SHA-256 (scalar, production)
+│   ├── sha256_simd.rs       AVX-512 SIMD 16-way parallel SHA-256
+│   ├── sha256_scalar.rs     Scalar SHA-256 backup (for test cross-validation)
+│   ├── software_id.rs       Base-35 encode/decode + sector_val rounding
+│   ├── targets.rs           Load collision targets from keys.toml
+│   ├── convert.rs           signature_hex ↔ Key text conversion (MTBase64) + metadata decode
+│   └── curve25519.rs        EC-KCDSA local license verification (curve25519-dalek-based)
+└── docs/                    Documentation -- see docs/README.md for the full index
+    ├── README.md            Documentation index
+    ├── quick-start.md       End-to-end walkthrough
+    ├── guides/              Step-by-step install walkthroughs (x86, NanoPi R5S)
+    ├── reference/           Algorithm & CLI reference (architecture, command-reference, ...)
+    ├── database/            Verified collision results, per bus/model
+    └── investigation/       Reverse-engineering notes, experiment log
 ```
 
 ## Performance

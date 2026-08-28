@@ -9,8 +9,8 @@ For PVE/QEMU deployment commands (`qm`, `qemu-img`, `qemu-nbd`, `dd`, `lvcreate`
 ## `ros-serialgen search`
 
 ```bash
-ros-serialgen search -s 100 -u g -t 16 -c 0 -k keys.toml
-ros-serialgen search -s 128 -u m -t 16 -c 0 -k keys.toml
+ros-serialgen search --disk-size 100 --unit g --threads 16 --count 0 --keys keys.toml
+ros-serialgen search --disk-size 128 --unit m --threads 16 --count 0 --keys keys.toml
 ```
 
 | Flag | Long form | Meaning |
@@ -36,14 +36,14 @@ Each unit has a separate minimum, all equivalent to 64 MB, enforced at startup (
 | `k` | `65536` (64 MB in KB) |
 | `b` | `67108864` (64 MB in bytes) |
 
-Decimal sizes are not supported (`-s` is an integer) -- fractional GB values must be expressed in a smaller unit instead, e.g. `-s 1536 -u m` for 1.5 GB. This avoids floating-point rounding errors in the byte-exact `sector_val` calculation.
+Decimal sizes are not supported (`-s` is an integer) -- fractional GB values must be expressed in a smaller unit instead, e.g. `-s 1536 --unit m` for 1.5 GB. This avoids floating-point rounding errors in the byte-exact `sector_val` calculation.
 
 Progress is logged every 10,000M (10 billion) hashes, e.g. `10000M hashes, 5s, 0 found`. At ~2000M hash/s (AVX-512) that's roughly every 5 seconds; at ~100M hash/s (scalar) roughly every 100 seconds.
 
 ## `ros-serialgen check`
 
 ```bash
-ros-serialgen check --serial 00000000090681934458 -s 24 -u g -m cheerlon
+ros-serialgen check --serial 00000000090681934458 --disk-size 24 --unit g --model cheerlon
 ```
 
 | Flag | Long form | Meaning |

@@ -29,23 +29,23 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release
 
 ```bash
 # Search for a collision at a given disk size
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
+ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> --count 0 --keys keys.toml
 
 # Sub-1GB sizes
-ros-serialgen search -s 128 -u m -t <threads> -c 0 -k keys.toml
+ros-serialgen search --disk-size 128 --unit m --threads <threads> --count 0 --keys keys.toml
 
 # Resume from checkpoint
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -f <progress_M> -k keys.toml
+ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> --count 0 --from <progress_M> --keys keys.toml
 
 # Background execution
-nohup ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml \
+nohup ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> --count 0 --keys keys.toml \
   > /tmp/results.txt 2> /tmp/progress.txt &
 ```
 
 ### Verify
 
 ```bash
-ros-serialgen check --serial <Serial> -s <N> -u <g|m|k|b>
+ros-serialgen check --serial <Serial> --disk-size <N> --unit <g|m|k|b>
 ```
 
 ### Test
@@ -76,7 +76,7 @@ cargo test
 | `modprobe nbd max_part=8` | Load NBD kernel module |
 | `qemu-nbd --connect=/dev/nbd0 <qcow2>` | Mount qcow2 as block device |
 | `dd of=/dev/nbd0 bs=1 seek=256 count=80` | Write 80-byte MBR license data |
-| `hexdump -C -s 0x100 -n 80 /dev/nbd0` | Verify MBR license region |
+| `hexdump -C --disk-size 0x100 -n 80 /dev/nbd0` | Verify MBR license region |
 | `qemu-nbd --disconnect /dev/nbd0` | Disconnect block device |
 
 ---

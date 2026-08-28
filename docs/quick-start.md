@@ -1,6 +1,6 @@
-# Quick Start: RouterOS L6 VM in 10 Minutes
+# Quick Start: Licensed RouterOS VM in 10 Minutes
 
-Deploy a licensed RouterOS L6 virtual machine on Proxmox VE using a pre-computed collision.
+Deploy a licensed RouterOS virtual machine on Proxmox VE using a pre-computed collision. The examples below use L6 signatures, but the technique works identically for any license level (L1-L6).
 
 ---
 
@@ -38,7 +38,7 @@ All entries above use space-free model names, so no `%20` encoding is needed.
 For unlisted sizes, search for a new collision (see [command-reference.md](reference/command-reference.md) for what each flag does; sub-1GB sizes are supported via `-u m/k/b`, minimum 64MB):
 
 ```bash
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> -c 0 -k keys.toml
+ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> --count 0 --keys keys.toml
 ```
 
 ---
@@ -104,7 +104,7 @@ sleep 1
 
 echo -n "00000000000000000000BDE800000000F4E11772DEEAED8AF43668DA5EBDAD0846B694FFE9E77EFAE77E11A6049E4303B0B09DCEF8D9A647D643D1BAD4AF13B9659CCB11A06D3A9080096634E4E88B07" | xxd -r -p | dd of=/dev/nbd0 bs=1 seek=256 count=80 conv=notrunc
 
-hexdump -C -s 0x100 -n 80 /dev/nbd0
+hexdump -C --disk-size 0x100 -n 80 /dev/nbd0
 qemu-nbd --disconnect /dev/nbd0
 ```
 
@@ -134,7 +134,7 @@ Expected output:
      features:
 ```
 
-`nlevel: 6` confirms L6 activation.
+`nlevel` should match the license level of the SOFTWARE ID you used (`6` for this walkthrough's example).
 
 ---
 
@@ -155,7 +155,7 @@ mkdir -p /tmp/serve
 cat > /tmp/serve/license.key << 'EOF'
 <paste the output of ros-serialgen sig2key here>
 EOF
-cd /tmp/serve && python3 -m http.server 8080 &
+cd /tmp/serve && python3 --model http.server 8080 &
 ip addr add 10.255.255.1/24 dev vmbr0 2>/dev/null
 ```
 

@@ -27,19 +27,20 @@ keys.toml                External key configuration (loaded at runtime, no recom
 
 ```bash
 # Search for collisions
-ros-serialgen search -s <N> -u <g|m|k|b> -t <threads> [-c <count>] [-f <from_M>] [-m <model>] [-k <keys.toml>] [-i <identity_hex>]
-  -s  Disk size magnitude, paired with -u
-  -u  Unit: g (gigabytes, default), m (megabytes), k (kilobytes), b (bytes) -- min size is 64M in any unit
-  -t  Thread count
-  -c  Collision count (default 1, 0 = unlimited collection)
-  -f  Resume from N million hashes (matches the M value in progress output)
-  -m  Custom Model (default ROS<N><unit>, e.g. ROS100G, ROS128M)
-  -k  Specify keys.toml path
-  -i  Non-standard 20-hex-char MBR identity (0x100-0x109); default is the standard all-zero identity
+ros-serialgen search --disk-size <N> --unit <g|m|k|b> --threads <threads> [--count <count>] [--from <from_M>] [--model <model>] [--keys <keys.toml>] [--identity <identity_hex>] [--bus <ide|scsi>]
+  --disk-size  Disk size magnitude, paired with --unit
+  --unit       Unit: g (gigabytes, default), m (megabytes), k (kilobytes), b (bytes) -- min size is 64M in any unit
+  --threads    Thread count
+  --count      Collision count (default 1, 0 = unlimited collection)
+  --from       Resume from N million hashes (matches the M value in progress output)
+  --model      Custom Model (default ROS<N><unit>, e.g. ROS100G, ROS128M)
+  --keys       Specify keys.toml path
+  --identity   Non-standard 20-hex-char MBR identity (0x100-0x109); default is the standard all-zero identity
+  --bus        Disk bus: ide (default, covers ide0/sata0) or scsi (scsi0/virtio-scsi-pci)
 
 # Verify a serial
-ros-serialgen check --serial <20-digit> -s <N> -u <g|m|k|b> [-m <model>] [-k <keys.toml>] [-i <identity_hex>] [-l <license.key>]
-  -l  Compare a .key file's (or raw signature_hex file's) embedded SOFTWARE ID against the one computed above
+ros-serialgen check --serial <value> --disk-size <N> --unit <g|m|k|b> [--model <model>] [--keys <keys.toml>] [--identity <identity_hex>] [--bus <ide|scsi>] [--license <license.key>]
+  --license    Compare a .key file's (or raw signature_hex file's) embedded SOFTWARE ID against the one computed above
 
 # Conversion (also prints SOFTWARE-ID/VERSION/LEVEL/NONCE-HASH/SIGNATURE/LICENSE-VALID metadata to stderr)
 ros-serialgen sig2key <128-char-hex>     # signature → Key text
@@ -60,6 +61,10 @@ cargo test          # 66+ unit tests (grows with new features -- see `cargo test
 cargo clippy        # a handful of pre-existing lints (too-many-arguments on CLI-plumbing functions, etc.); no new categories from recent changes
 cargo fmt --check   # format check
 ```
+
+## Documentation Style
+
+- Command-line examples in `docs/` and `AGENTS.md` use **long-form flags** (`--disk-size`, not `-s`) for readability -- short flags are fine in interactive/muscle-memory use but obscure meaning for a reader seeing the command cold.
 
 ## Code Rules
 
