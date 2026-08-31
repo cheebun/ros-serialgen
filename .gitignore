@@ -3,6 +3,6 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
-keys.toml
-PRIVATE-*.md
-keys*.toml
+/keys/
+/docs/mbr-data.md
+/archive/

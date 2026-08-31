@@ -1200,3 +1200,26 @@ Triggered by an externally-supplied real-hardware case: `Model=C52iG-5HaxD2HaxD`
 
 **Also confirmed this session, filed for reference:** `tools/bin/` binaries were renamed to a consistent `keyman_{arch}_{version}` scheme (`keyman_x86_7.23.2`, `keyman_x86_7.24.1`, `keyman_arm_7.24.1`), with all path references across `README.md`, `AGENTS.md`, `tools/README.md`, `docs/toolchain.md`, `tools/rust/docs/architecture.md`, and `curve25519.rs` updated to match.
 
+### 8.40 Confirmed discrepancy: `ros-serialgen`'s own SOFTWARE ID computation disagrees with a real x86 `keyman` (RouterOS 6.49.13) at exact byte size `1,117,782,016` (real device, non-standard identity) -- open, unexplained, needs investigation
+
+While tracing a real device's `VI8Q-E90F`/Level-4 signature (issue #1, MurVlad's reflashed x86 machine, `model=QEMU HARDDISK`, `serial=QM00001`, identity `50508089413009661362`, marker `0362`), two different real disk images of the *same physical device* gave conflicting exact byte sizes:
+
+- A partial capture (first 10MB, MBR + partition table only) implied a lower bound of `1,071,645,184` bytes from the last partition's end sector. Building a fresh PVE VM with **exactly this size** and the identity/marker/signature above reproduced `software-id: VI8Q-E90F`, `nlevel: 4`, no `expires-in` -- confirmed genuine, permanent activation, both via `ros-serialgen check` (matches) and real RouterOS 7.24.1 boot.
+- A separate, older full-disk backup (Proxmox VMA, RouterOS 6.49.13, `2024-02-21`) of the *same device* extracted to a raw image of exactly `1,117,782,016` bytes (`qemu-img info` confirms QEMU sees this as the exact virtual size, no hidden padding). Booting this raw disk directly (not reconstructed -- the device's own real data) also shows `software-id: VI8Q-E90F`, `nlevel: 4`, no `expires-in` on real RouterOS **6.49.13**.
+
+Both real disks -- different exact byte sizes, same identity/marker/signature -- genuinely activate as `VI8Q-E90F`/Level 4. But `ros-serialgen check` with the *second* disk's exact byte size (`--disk-size 1117782016 --unit b`, same serial/model/identity) computes a **different** SOFTWARE ID (`7SQU-S9AM`), not `VI8Q-E90F`:
+
+```
+./target/release/ros-serialgen check --serial QM00001 --disk-size 1117782016 --unit b \
+  --model "QEMU HARDDISK" --identity 50508089413009661362
+# Software ID: 7SQU-S9AM  (❌ does not match the real device's VI8Q-E90F)
+```
+
+This is a **confirmed, reproducible disagreement** between this project's own SOFTWARE ID algorithm and two independent real `keyman` binaries (RouterOS 6.49.13 and 7.24.1), not a measurement or precision error -- both the byte size and the identity/marker/signature bytes were read directly off real disk images, and QEMU independently confirms the exact virtual disk size it presents to the guest. Candidate explanations, **none yet verified**:
+
+- A bug in this project's `round_sectors`/`sector_val` computation specific to this size range (`~1.04 GiB`, `sector_val` around `0x480`).
+- A version-dependent difference in the real `keyman` algorithm between RouterOS 6.49.13 and 7.24.1 that happens not to matter for the sizes this project has tested so far (both real-device boots used the *same* signature/identity and both activated, so if there *is* a version difference, it isn't in how `VI8Q-E90F` itself validates -- it would have to be specifically in how `sector_val` is derived from the raw byte count).
+- Something about how the VMA-extracted `1,117,782,016`-byte figure relates to the *actual* sector count RouterOS's own `keyman` reads at license-check time that isn't a simple `bytes / 512` (e.g. a reserved trailing region not counted by `keyman` but present in the backup).
+
+**Not yet done:** disassembling the exact `sector_val` derivation path in both `keyman_x86_7.23.2`/`7.24.1` (already partially covered by earlier sections) against a from-scratch trace using this specific byte count, and checking whether RouterOS 6.x's `keyman` (not yet extracted/disassembled by this project) computes `sector_val` identically to 7.x. This is flagged prominently rather than silently worked around, since it means **this project's own algorithm cannot currently be trusted to be correct in this size range** until resolved.
+
